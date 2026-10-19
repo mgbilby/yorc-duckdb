@@ -1,0 +1,610 @@
+# name: test/sql/orcid_recipes.test
+# description: the fixture-runnable recipes of docs/RECIPES.md (numbers in the comments); expected values from grep/awk/inspection of the fixtures, each stated
+# group: [orcid]
+#
+# On a failure, fix the expectation, not the recipe, only after checking the
+# fixture by hand.
+#
+# Not here: 3.5 (needs the network), 6 second query and 13 third query (need a
+# full dump), 15 (DuckDB v2.0 only).
+#
+# F = test/data/0000-0003-0100-6634.xml, the only record directly in test/data
+# (the test/data/*.xml globs); D = test/data/demo/0000-0002-2771-9344.xml, the
+# record the recipes name; S = ORCID's sample record
+# reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml, for the
+# recipes about affiliations and fundings, which D does not have. All three are
+# pretty-printed, one element per line, so grep -c counts elements.
+
+require yorc
+
+require parquet
+
+# ---------------------------------------------------------------- 2. iDs
+
+query III
+SELECT orcid_normalize('https://orcid.org/0000-0002-1825-0097'),
+       orcid_normalize(' 000000021694233x '),
+       orcid_valid('0000-0002-1825-0098');
+----
+0000-0002-1825-0097	0000-0002-1694-233X	false
+
+# id.cpp NormalizeId skips '-' and whitespace after the prefix; 'www.' is not a prefix
+query III
+SELECT raw, orcid_normalize(raw) AS orcid, orcid_valid(raw) AS valid
+FROM (VALUES ('https://orcid.org/0000-0002-1825-0097'),
+             ('0000 0002 1825 0097'),
+             ('0000-0002-1825-0098'),
+             ('https://www.orcid.org/0000-0002-1825-0097')) t(raw)
+ORDER BY raw;
+----
+0000 0002 1825 0097	0000-0002-1825-0097	true
+0000-0002-1825-0098	NULL	false
+https://orcid.org/0000-0002-1825-0097	0000-0002-1825-0097	true
+https://www.orcid.org/0000-0002-1825-0097	NULL	false
+
+# ---------------------------------------------------------------- 3.1 one record
+# python3 -I (xml.etree) over D: put-code and publication-date/year of each
+# <work:work-summary>, sorted by year desc, put-code asc; every work has a year
+# (12 of 12): the three of 2026, then 37069489 and 43318438 of 2017
+
+query I
+SELECT list(put_code ORDER BY put_code)
+FROM (SELECT put_code, title, type, pub_year, doi
+      FROM orcid_works('test/data/demo/0000-0002-2771-9344.xml')
+      ORDER BY pub_year DESC, put_code
+      LIMIT 5);
+----
+[37069489, 43318438, 224052943, 224052944, 224052945]
+
+# ---------------------------------------------------------------- 3.2 directory, glob
+# grep -c '<work:work-summary' F = 382; one level down: activities/ 1 <work:work>,
+# changes/old.xml 1 and new.xml 1 <work:work-summary>, demo/ (D) 12 <work:work-summary>,
+# errors/ 0, synthetic/ 2 <work:work>
+
+query II
+SELECT count(*), count(DISTINCT orcid) FROM orcid_works('test/data/*.xml');
+----
+382	1
+
+query I
+SELECT count(*) FROM orcid_works('test/data/*/*.xml');
+----
+17
+
+# ---------------------------------------------------------------- 3.3 XML in a table
+# grep -c on F: 18 employment + 9 education + 7 distinction + 16 membership + 29 service summaries
+
+statement ok
+CREATE TABLE records AS
+SELECT regexp_extract(filename, '([0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X])', 1) AS orcid,
+       content AS xml
+FROM read_text('test/data/*.xml');
+
+query II
+SELECT count(*), count(DISTINCT r.orcid)
+FROM (SELECT r.orcid, a.affiliation_type, a.org_name, a.start_year FROM records r, orcid_affiliations_xml(r.xml) a) r;
+----
+79	1
+
+statement ok
+CREATE TABLE works_empty AS SELECT * FROM orcid_works_xml(NULL);
+
+query II
+SELECT (SELECT count(*) FROM works_empty), (SELECT count(*) FROM (DESCRIBE works_empty));
+----
+0	32
+
+# ---------------------------------------------------------------- 3.4 an archive in place
+# tar -tvzf test/data/dump/orcid_test_summaries.tar.gz: three .xml members; the
+# third's path holds 0000-0000-0000-0000, whose MOD 11-2 check character is 1, so no iD
+
+query III
+SELECT orcid, given_names, family_name
+FROM orcid_person('test/data/dump/orcid_test_summaries.tar.gz')
+ORDER BY orcid;
+----
+0000-0003-0100-6634	Mark	Bilby
+8888-8888-8888-8880	give-names	family-name
+
+query III
+SELECT count(*), count(orcid), count(*) FILTER (WHERE length(xml) > 0)
+FROM (SELECT member, orcid, xml FROM orcid_documents('test/data/dump/orcid_test_summaries.tar.gz'));
+----
+3	2	3
+
+# ---------------------------------------------------------------- 3.6 named parameters
+# member sizes from tar -tvzf: the 634 member (382 works) is 1,324,198 bytes and comes first
+
+query II
+SELECT count(*), min(orcid)
+FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', members := '*/634/*');
+----
+382	0000-0003-0100-6634
+
+query I
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', max_records := 1);
+----
+382
+
+statement error
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', max_member_bytes := 1000);
+----
+over max_member_bytes (1000)
+
+# ---------------------------------------------------------------- 3.7 a reproducible sample of a dump
+# the fixture's two records, in archive order; seed 42
+# draws below(2) = 1, so capacity 1 keeps the first (orcid_dump_sample.test)
+query III
+SELECT slot, orcid, eligible FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 1, 42);
+----
+0	0000-0003-0100-6634	2
+
+# works per sampled record: 382 in the fixture record, 1 in 8888-8888-8888-8880
+# (the dump's 386 works less the 3 of the works document)
+query II
+SELECT s.orcid, count(*) AS works
+FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 5, 42) s, orcid_works_xml(s.xml) w
+GROUP BY s.orcid ORDER BY s.orcid;
+----
+0000-0003-0100-6634	382
+8888-8888-8888-8880	1
+
+# ---------------------------------------------------------------- 4. one query per section
+# values read off the reference/orcid-model samples named in each query
+
+# 4.1 work-full-3.0.xml: put-code="123", <work:type>artistic-performance, year 1948, doi/self 'work:doi'
+query IIIIII
+SELECT put_code, title, type, pub_year, doi, item
+FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml');
+----
+123	common:title	artistic-performance	1948	work:doi	work
+
+# 4.2 funding-full-3.0.xml: <funding:type>grant, <funding:amount currency-code="ADP">1234, organization common:name / FUNDREF
+query IIIIII
+SELECT title, type, amount, currency, org_name, org_disambiguation_source
+FROM orcid_fundings('reference/orcid-model/record_3.0/samples/read_samples/funding-full-3.0.xml');
+----
+common:title	grant	1234	ADP	common:name	FUNDREF
+
+# 4.3 record-3.0.xml: one summary of each type; start/end years by awk over its start-date / end-date blocks
+query IIIII
+SELECT affiliation_type, org_name, role_title, start_year, end_year
+FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')
+ORDER BY affiliation_type;
+----
+distinction	distinction-org	distinction:role-title	1948	1948
+education	education-org	education:role-title	1948	2019
+employment	employment-org	employment:role-title	1948	2025
+invited-position	invited-position-org	invited-position:role-title	2019	2025
+membership	membership-org	membership:role-title	1948	NULL
+qualification	qualification-org	qualification:role-title	1948	2025
+service	service-org	service:role-title	1948	NULL
+
+# 4.4 peer-review-full-3.0.xml: review-completion-date/year 1948 (the 'or' path), convening-organization common:name
+query IIIIII
+SELECT reviewer_role, review_type, completion_year, subject_type, subject_name, convening_org_name
+FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/read_samples/peer-review-full-3.0.xml');
+----
+reviewer	review	1948	journal-article	peer-review:subject-name	common:name
+
+# 4.5 research-resource-3.0.xml: proposal title, first host XSEDE, 1999-2012; two resource-items
+query IIII
+SELECT title, host_name, start_year, end_year
+FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/read_samples/research-resource-3.0.xml');
+----
+Giant Laser Award	XSEDE	1999	2012
+
+query IIIII
+SELECT owner_put_code, ordinal, resource_name, resource_type, host_name
+FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/read_samples/research-resource-3.0.xml')
+ORDER BY ordinal;
+----
+1234	1	Giant Laser 1	infrastructures	Lasers-R-US
+1234	2	Moon Targets	infrastructures	Moon Holdings Ltd
+
+# 4.6 work-full-3.0.xml: one <work:contributor>
+query IIIIIII
+SELECT owner, owner_put_code, ordinal, contributor_orcid, credit_name, sequence, role
+FROM orcid_contributors('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml');
+----
+work	123	1	8888-8888-8888-8880	work:credit-name	first	author
+
+# 4.7 work-full-3.0.xml: two <common:external-id>
+query IIIIII
+SELECT owner, owner_put_code, container, type, value, relationship
+FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml')
+ORDER BY type;
+----
+work	123	external-ids	agr	work:external-identifier-id	version-of
+work	123	external-ids	doi	work:doi	self
+
+# 4.8 record-3.0.xml person/name and biography
+query IIII
+SELECT given_names, family_name, credit_name, biography
+FROM orcid_person('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml');
+----
+give-names	family-name	credit-name	biography
+
+# 4.9 record-3.0.xml: one item of each of the six person-item kinds
+query I
+SELECT string_agg(kind || '=' || value, ',' ORDER BY kind)
+FROM (SELECT kind, value, url, type, visibility
+      FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml'));
+----
+address=US,email=user1@email.com,external-identifier=value-1,keyword=keyword1,other-name=other-name-1,researcher-url=url-name-1
+
+# 4.10 history-3.0.xml
+query IIII
+SELECT creation_method, claimed, verified_email, visibility
+FROM orcid_history('reference/orcid-model/record_3.0/samples/read_samples/history-3.0.xml');
+----
+API	true	true	private
+
+# ---------------------------------------------------------------- 5.1 works, contributors, external ids
+
+query IIIIII
+WITH w AS (SELECT * FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml')),
+     c AS (SELECT * FROM orcid_contributors('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml')),
+     e AS (SELECT * FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml'))
+SELECT w.put_code, w.title, c.credit_name, c.role, e.type AS id_type, e.value AS id_value
+FROM w
+LEFT JOIN c ON c.source_hash = w.source_hash AND c.owner_put_code = w.put_code
+LEFT JOIN e ON e.source_hash = w.source_hash AND e.owner_put_code = w.put_code
+ORDER BY e.type;
+----
+123	common:title	work:credit-name	author	agr	work:external-identifier-id
+123	common:title	work:credit-name	author	doi	work:doi
+
+# the same join over the synthetic bulk response, whose documents carry no root path:
+# 2 works x (3 + 3 contributors) x (1 + 2 external ids) = 3 + 6 rows
+query II
+WITH w AS (SELECT * FROM orcid_works('test/data/synthetic/coauthors-bulk.xml')),
+     c AS (SELECT * FROM orcid_contributors('test/data/synthetic/coauthors-bulk.xml')),
+     e AS (SELECT * FROM orcid_external_ids('test/data/synthetic/coauthors-bulk.xml'))
+SELECT w.put_code, count(*)
+FROM w
+LEFT JOIN c ON c.source_hash = w.source_hash AND c.owner_put_code = w.put_code
+LEFT JOIN e ON e.source_hash = w.source_hash AND e.owner_put_code = w.put_code
+GROUP BY w.put_code ORDER BY w.put_code;
+----
+101	3
+102	6
+
+# ---------------------------------------------------------------- 5.2 affiliation timeline
+# S has one <employment:employment-summary>: start 1948-02-02, end-date year 2025
+# (as recipe 4.3), so none is current
+
+query IIIII
+SELECT count(*), count(*) FILTER (WHERE is_current), min(start_year), max(start_year),
+       min(start_year) FILTER (WHERE is_current)
+FROM (SELECT affiliation_type, org_name, role_title, start_year, end_year, end_year IS NULL AS is_current
+      FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')
+      WHERE affiliation_type = 'employment'
+      ORDER BY start_year, end_year NULLS LAST);
+----
+1	0	1948	1948	NULL
+
+# ---------------------------------------------------------------- 5.3 funding by funder
+# S's one <funding:funding-summary>: organization name common:name, FUNDREF
+
+query II
+SELECT funder, fundings
+FROM (SELECT org_name AS funder, org_disambiguation_source, org_disambiguated_id,
+             count(*) AS fundings, min(start_year) AS first_year, max(end_year) AS last_year
+      FROM orcid_fundings('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')
+      GROUP BY ALL)
+ORDER BY fundings DESC, funder;
+----
+common:name	1
+
+# ---------------------------------------------------------------- 6. DOIs and duplicates
+# python3 -I (xml.etree) over D: first external-id with type doi and relationship
+# self in each work-summary, lowercased: 12 DOIs, 11 distinct;
+# 10.25592/uhhfdm.19102 by 2 works (224052943, 224052945), both in work group 1
+
+query IIII
+SELECT count(*), max(works), count(*) FILTER (WHERE groups > 1), sum(works)
+FROM (SELECT doi, count(*) AS works, count(DISTINCT group_index) AS groups, list(put_code ORDER BY put_code) AS put_codes
+      FROM orcid_works('test/data/demo/0000-0002-2771-9344.xml')
+      WHERE doi IS NOT NULL
+      GROUP BY doi
+      HAVING count(*) > 1);
+----
+1	2	0	2
+
+query III
+SELECT doi, works, groups
+FROM (SELECT doi, count(*) AS works, count(DISTINCT group_index) AS groups
+      FROM orcid_works('test/data/demo/0000-0002-2771-9344.xml')
+      WHERE doi IS NOT NULL GROUP BY doi HAVING count(*) > 1)
+ORDER BY works DESC, doi LIMIT 1;
+----
+10.25592/uhhfdm.19102	2	1
+
+# ---------------------------------------------------------------- 7. co-author pairs
+# test/data/synthetic/coauthors-bulk.xml: work 101 lists 0000-0002-1825-0097,
+# 0000-0001-5109-3700 and one contributor without an iD; work 102 lists
+# 0000-0001-5109-3700, 0000-0002-1694-233X and 0000-0002-1825-0097
+
+query III
+WITH c AS (
+  SELECT DISTINCT source_hash, owner, owner_put_code, contributor_orcid
+  FROM orcid_contributors('test/data/synthetic/coauthors-bulk.xml')
+  WHERE contributor_orcid IS NOT NULL)
+SELECT a.contributor_orcid AS orcid_a, b.contributor_orcid AS orcid_b, count(*) AS works
+FROM c a
+JOIN c b ON a.source_hash = b.source_hash AND a.owner = b.owner AND a.owner_put_code = b.owner_put_code
+        AND a.contributor_orcid < b.contributor_orcid
+GROUP BY ALL
+ORDER BY works DESC, orcid_a, orcid_b;
+----
+0000-0001-5109-3700	0000-0002-1825-0097	2
+0000-0001-5109-3700	0000-0002-1694-233X	1
+0000-0002-1694-233X	0000-0002-1825-0097	1
+
+# ---------------------------------------------------------------- 8. institutions
+# S: disambiguation-source inside the seven affiliation summaries: GRID for
+# distinction, education, employment, invited-position; RINGGOLD for
+# membership, qualification, service (each with its own identifier)
+
+query II
+SELECT source, sum(affiliations)
+FROM (SELECT org_disambiguation_source AS source, org_disambiguated_id AS id,
+             any_value(org_name) AS name, count(DISTINCT orcid) AS people, count(*) AS affiliations
+      FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')
+      WHERE org_disambiguated_id IS NOT NULL
+      GROUP BY ALL)
+GROUP BY source ORDER BY source;
+----
+GRID	4
+RINGGOLD	3
+
+# ---------------------------------------------------------------- 9. timeline
+# D's count is pinned by orcid_docs_examples.test (33); the synthetic bulk:
+# work 101 created == modified (1 event), work 102 differs (2 events)
+
+query II
+SELECT count(*), count(*) FILTER (WHERE event = 'created')
+FROM orcid_timeline('test/data/synthetic/coauthors-bulk.xml');
+----
+3	2
+
+query I
+SELECT count(*)
+FROM (SELECT event_at::TIMESTAMPTZ AS event_at, event, kind, put_code, label
+      FROM orcid_timeline('test/data/demo/0000-0002-2771-9344.xml')
+      ORDER BY event_at LIMIT 10);
+----
+10
+
+# ---------------------------------------------------------------- 10. changes
+# 10.1: the five rows of orcid_history_of_record.test; 10.2: the 16 rows listed in
+# orcid_docs_examples.test, tallied by section and change
+
+query IIIIIII
+SELECT section, kind, put_code, change, field, old_value, new_value
+FROM orcid_changes('test/data/changes/old.xml', 'test/data/changes/new.xml');
+----
+person	NULL	NULL	modified	given_names	give-names	given-names
+person_items	keyword	2	added	NULL	NULL	NULL
+works	NULL	0	modified	title	common:title	Revised title
+fundings	NULL	0	removed	NULL	NULL	NULL
+affiliations	employment	0	modified	role_title	employment:role-title	Senior employment:role-title
+
+query III
+WITH pairs AS (
+  SELECT orcid, a.xml AS old_xml, b.xml AS new_xml
+  FROM orcid_documents('test/data/releases/ORCID_2024_10_summaries.tar.gz') a
+  FULL JOIN orcid_documents('test/data/releases/ORCID_2025_10_summaries.tar.gz') b USING (orcid))
+SELECT c.section, c.change, count(*) AS n
+FROM pairs p, orcid_changes_xml(p.old_xml, p.new_xml) c
+GROUP BY ALL ORDER BY c.section, c.change;
+----
+affiliations	added	1
+affiliations	modified	1
+affiliations	removed	2
+history	added	1
+history	removed	1
+person	added	1
+person	modified	1
+person	removed	1
+works	added	2
+works	modified	2
+works	removed	3
+
+# ---------------------------------------------------------------- 11. locked and deprecated
+
+query IIII
+SELECT orcid, response_code, error_code, primary_orcid
+FROM orcid_errors('test/data/errors/*.xml')
+ORDER BY orcid;
+----
+0000-0001-5272-5001	409	9018	NULL
+0000-0001-5433-3001	301	9007	0009-0008-8963-1314
+
+# ---------------------------------------------------------------- 12. API messages
+# values as pinned by orcid_api_messages.test, read off the same samples
+
+query IIIIII
+SELECT orcid, credit_name, employment_count, work_validated_count, peer_review_total, email_domains
+FROM orcid_summary('reference/orcid-model/summary_3.0/samples/summary-3.0.xml');
+----
+8888-8888-8888-8880	User credited name	5	1	6	orcid.org; domain.org
+
+query II
+SELECT kind, count(*) FROM orcid_summary_items('reference/orcid-model/summary_3.0/samples/summary-3.0.xml')
+GROUP BY kind ORDER BY kind;
+----
+email-domain	2
+employment	3
+external-identifier	3
+professional-activity	1
+
+query III
+SELECT num_found, ordinal, orcid FROM orcid_search_results('reference/orcid-model/record_3.0/samples/read_samples/search-3.0.xml');
+----
+1	1	8888-8888-8888-8880
+
+query IIIII
+SELECT response_code, error_code, user_message, container, position
+FROM orcid_errors('reference/orcid-model/record_3.0/samples/read_samples/bulk-work-err.xml');
+----
+400	9037	Please specify a work type.	bulk	2
+
+query IIII
+SELECT notification_type, subject, item_count, item_types
+FROM orcid_notifications('reference/orcid-model/notification_3.0/samples/notification-permission-3.0.xml');
+----
+permission	Subject	4	work; employment; distinction; service
+
+query III
+SELECT name, group_id, type FROM orcid_group_ids('reference/orcid-model/group-id-3.0/samples/group-id-3.0.xml');
+----
+group-id:name	issn:xxxxxxxx	publisher
+
+# ---------------------------------------------------------------- 13. export
+# (parquet: required at the top of the file)
+
+statement ok
+COPY (SELECT * FROM orcid_works('test/data/*.xml')) TO '__TEST_DIR__/recipes_works.parquet' (FORMAT parquet);
+
+statement ok
+COPY (SELECT orcid, put_code, title, pub_year, doi FROM orcid_works('test/data/*.xml'))
+  TO '__TEST_DIR__/recipes_works.csv' (HEADER, DELIMITER ',');
+
+query III
+SELECT (SELECT count(*) FROM read_parquet('__TEST_DIR__/recipes_works.parquet')),
+       (SELECT count(*) FROM read_csv('__TEST_DIR__/recipes_works.csv')),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM read_parquet('__TEST_DIR__/recipes_works.parquet')));
+----
+382	382	32
+
+# ---------------------------------------------------------------- 14. performance
+
+statement ok
+SET threads = 4;
+
+statement ok
+SET preserve_insertion_order = false;
+
+statement ok
+CREATE TABLE works_fast AS SELECT * FROM orcid_works('test/data/*.xml');
+
+query I
+SELECT count(*) FROM works_fast;
+----
+382
+
+statement ok
+SET preserve_insertion_order = true;
+
+statement ok
+CREATE TEMP TABLE stage AS SELECT content AS xml FROM read_text('test/data/0000-0003-0100-6634.xml');
+
+query I
+SELECT count(*) FROM orcid_works_xml((SELECT xml FROM stage));
+----
+382
+
+# ---------------------------------------------------------------- 16. read ORCID JSON
+# (recipes 16-19: values from the samples with python3 -I and grep, as in
+# test/sql/orcid_json.test and orcid_write.test)
+
+query IIIII
+SELECT orcid, put_code, title, type, created
+FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json');
+----
+0000-0002-7319-2192	178602	Work Title	journal-article	2019-06-07T14:16:57.189Z
+
+query II
+SELECT count(*), string_agg(DISTINCT item, ',')
+FROM (SELECT title, item FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.*'));
+----
+2	work
+
+query II
+SELECT count(*), count(DISTINCT affiliation_type)
+FROM (SELECT a.affiliation_type, a.org_name, a.start_year
+      FROM read_text('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') t,
+           orcid_affiliations_json(t.content) a
+      ORDER BY a.put_code);
+----
+10	7
+
+query III
+SELECT department, role_title, org_name
+FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/employment-3.0.json',
+                        json_root := 'employment');
+----
+Primary Care Health Services	Role	Boston University
+
+# ---------------------------------------------------------------- 17. write a work as an ORCID document
+
+query IIIIII
+SELECT w.title, w.journal, w.pub_year, w.pub_month, w.doi, c.credit_name || '/' || c.sequence || '/' || c.role
+FROM (SELECT orcid_work_to_json({
+    'title': 'Hydrothermal vent communities', 'type': 'journal-article',
+    'journal': 'Deep-Sea Research', 'pub_year': 2024, 'pub_month': 3,
+    'external_ids': [{'type': 'doi', 'value': '10.1234/vents.2024', 'relationship': 'self'}],
+    'contributors': [{'credit_name': 'A. Researcher', 'sequence': 'first', 'role': 'author'}]}) AS body) b,
+     orcid_works_json(b.body) w, orcid_contributors_json(b.body) c;
+----
+Hydrothermal vent communities	Deep-Sea Research	2024	3	10.1234/vents.2024	A. Researcher/first/author
+
+# test/data/activities/...30089981.xml: put-code 30089981, type other, year 2014, one DOI
+# (10.6084/M9.FIGSHARE.1119230), one contributor (Henry Rzepa)
+query IIIIII
+WITH w AS (SELECT * FROM orcid_works('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+     x AS (SELECT orcid_work_to_xml(struct_insert(w,
+             external_ids := (SELECT list(e) FROM orcid_external_ids('test/data/activities/0000-0002-8635-8390_works_30089981.xml') e
+                              WHERE e.owner_put_code = w.put_code),
+             contributors := (SELECT list(c ORDER BY c.ordinal)
+                              FROM orcid_contributors('test/data/activities/0000-0002-8635-8390_works_30089981.xml') c
+                              WHERE c.owner_put_code = w.put_code))) AS doc
+           FROM w)
+SELECT r.put_code, r.type, r.pub_year, r.doi, (SELECT min(credit_name) FROM orcid_contributors_xml((SELECT doc FROM x))),
+       r.title = (SELECT title FROM w)
+FROM orcid_works_xml((SELECT doc FROM x)) r;
+----
+30089981	other	2014	10.6084/m9.figshare.1119230	Henry Rzepa	true
+
+# ---------------------------------------------------------------- 18. bulk documents
+# D has 12 works (grep -c '<work:work-summary'), with distinct put-codes: one batch
+
+query III
+WITH w AS (SELECT * FROM orcid_works('test/data/demo/0000-0002-2771-9344.xml')),
+     b AS (SELECT put_code, (row_number() OVER (ORDER BY put_code) - 1) // 100 AS batch FROM w),
+     out AS (SELECT b.batch, count(*) AS works, orcid_bulk_works_to_json(list(w ORDER BY w.put_code)) AS body
+             FROM w JOIN b USING (put_code)
+             GROUP BY b.batch ORDER BY b.batch)
+SELECT string_agg(works::VARCHAR, ',' ORDER BY batch),
+       (SELECT count(*) FROM out o, orcid_works_json(o.body) r),
+       (SELECT count(DISTINCT r.put_code) FROM out o, orcid_works_json(o.body) r)
+FROM out;
+----
+12	12	12
+
+# ---------------------------------------------------------------- 19. XML <-> JSON
+
+query I
+SELECT count(*) FROM (
+  SELECT * EXCLUDE (source_hash) FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml')
+  EXCEPT
+  SELECT j.* EXCLUDE (source_hash)
+  FROM (SELECT orcid_work_to_json(struct_insert(w,
+          external_ids := (SELECT list(e) FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml') e),
+          contributors := (SELECT list(c ORDER BY c.ordinal) FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml') c))) AS body
+        FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml') w) d,
+       orcid_works_json(d.body) j);
+----
+0
+
+query II
+SELECT starts_with(x, '<?xml version="1.0" encoding="UTF-8"?>' || chr(10) || '<employment:employment '),
+       (SELECT org_name FROM orcid_affiliations_xml(x))
+FROM (SELECT orcid_affiliation_to_xml(struct_insert(a,
+         external_ids := (SELECT list(e) FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/employment-3.0.json',
+                                                                 json_root := 'employment') e))) AS x
+      FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/employment-3.0.json', json_root := 'employment') a);
+----
+true	Boston University

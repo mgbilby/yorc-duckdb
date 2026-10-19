@@ -1,0 +1,210 @@
+# name: test/sql/orcid_docs_examples.test
+# description: every SQL example of README.md and description.yml (hello_world, extended_description), run on the fixtures in test/data instead of the placeholder paths; expected values from grep/inspection of the fixtures
+# group: [orcid]
+#
+# Path substitutions (the examples' placeholders -> fixtures):
+#   records/*.xml, record.xml -> test/data/demo/*.xml (the one file there:
+#     0000-0002-2771-9344.xml, a public record ORCID uses as an example: 12 works,
+#     no affiliations or fundings)
+#   records/*.xml in the lateral join over affiliations -> test/data/demo/*.xml and
+#     ORCID's sample record reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml,
+#     which has one affiliation of each of the seven types
+#   2024|2025/record.xml -> test/data/changes/{old,new}.xml
+#   records/0000-0002-1825-0097.xml -> test/data/demo/0000-0002-2771-9344.xml
+#   records/*.json -> reference/orcid-model/record_3.0/samples/read_samples/*.json (the one record JSON sample)
+#   https://ndownloader.figshare.com/files/<file-id> -> test/data/dump/orcid_test_summaries.tar.gz (no network in tests)
+#   two Public Data File releases -> test/data/releases/ORCID_202{4,5}_10_summaries.tar.gz
+#     (scripts/make_release_fixtures.py; the edits are listed there)
+
+require yorc
+
+# ---------------------------------------------------------------- iDs (README "Quick start"; hello_world 1)
+
+query I
+SELECT orcid_normalize('https://orcid.org/0000-0002-1825-0097');
+----
+0000-0002-1825-0097
+
+query I
+SELECT orcid_valid('0000-0002-1825-0098');
+----
+false
+
+# ---------------------------------------------------------------- saved records (README; hello_world 2)
+# test/data/demo/*.xml is the one record 0000-0002-2771-9344: 12 <work:work-summary>,
+# each with a doi/self id, latest publication year 2026 (python3 -I, xml.etree)
+
+query IIII
+SELECT count(*), count(DISTINCT orcid), max(pub_year), count(*) FILTER (WHERE doi IS NOT NULL)
+FROM (SELECT orcid, title, type, pub_year, doi FROM orcid_works('test/data/demo/*.xml') ORDER BY pub_year DESC);
+----
+12	1	2026	12
+
+query I
+SELECT pub_year FROM orcid_works('test/data/demo/*.xml') ORDER BY pub_year DESC NULLS LAST LIMIT 1;
+----
+2026
+
+# ---------------------------------------------------------------- XML in a table, lateral join (README; hello_world 3)
+
+# the demo record has no affiliations; the sample record has one of each of the seven types
+statement ok
+CREATE TABLE records AS
+SELECT regexp_extract(filename, '([0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X])', 1) AS orcid, content AS xml
+FROM read_text(['test/data/demo/*.xml', 'reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml']);
+
+query II
+SELECT count(*), count(DISTINCT affiliation_type)
+FROM (SELECT r.orcid, a.affiliation_type, a.org_name, a.start_year FROM records r, orcid_affiliations_xml(r.xml) a);
+----
+7	7
+
+# ---------------------------------------------------------------- JSON in, documents out (README; hello_world 7)
+# record-full-3.0.json: one work-summary, 178602, "Work Title", self DOI work:doi, year 2012 (python3 -I)
+
+query IIIII
+SELECT orcid, title, type, pub_year, doi FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/*.json');
+----
+0000-0002-7319-2192	Work Title	journal-article	2012	work:doi
+
+# the writer's JSON (src/core/writer.cpp: work-3.0.xsd order, ORCID's value wrappers, two-space indent)
+query I
+SELECT replace(orcid_work_to_json({'title': 'Deep-sea vents', 'type': 'journal-article', 'pub_year': 2024,
+                                   'external_ids': [{'type': 'doi', 'value': '10.1234/vents', 'relationship': 'self'}]}), chr(10), '\n');
+----
+{\n  "title": {\n    "title": {\n      "value": "Deep-sea vents"\n    }\n  },\n  "type": "journal-article",\n  "publication-date": {\n    "year": {\n      "value": "2024"\n    }\n  },\n  "external-ids": {\n    "external-id": [\n      {\n        "external-id-type": "doi",\n        "external-id-value": "10.1234/vents",\n        "external-id-relationship": "self"\n      }\n    ]\n  }\n}\n
+
+query III
+SELECT title, pub_year, doi
+FROM orcid_works_json(orcid_work_to_json({'title': 'Deep-sea vents', 'type': 'journal-article', 'pub_year': 2024,
+                                          'external_ids': [{'type': 'doi', 'value': '10.1234/vents', 'relationship': 'self'}]}));
+----
+Deep-sea vents	2024	10.1234/vents
+
+# hello_world 7, second query: a work row as the reader returns it, written back
+query I
+SELECT count(*) FROM (SELECT orcid_work_to_json(w) FROM orcid_works('test/data/demo/0000-0002-2771-9344.xml') w LIMIT 1);
+----
+1
+
+# ---------------------------------------------------------------- a dump, read in place (README; hello_world 4)
+
+query III
+SELECT orcid, given_names, family_name
+FROM orcid_person('test/data/dump/orcid_test_summaries.tar.gz', max_records := 1000)
+ORDER BY orcid;
+----
+0000-0003-0100-6634	Mark	Bilby
+8888-8888-8888-8880	give-names	family-name
+
+# ---------------------------------------------------------------- one snapshot, then two (README; hello_world 5)
+
+query III
+SELECT count(*), min(event_at), max(event_at)
+FROM (SELECT event_at, event, kind, label FROM orcid_timeline('test/data/demo/0000-0002-2771-9344.xml') ORDER BY event_at);
+----
+33	2017-09-21T10:01:37.509Z	2026-08-17T12:42:27.716Z
+
+query IIIIIII
+SELECT section, kind, put_code, change, field, old_value, new_value
+FROM orcid_changes('test/data/changes/old.xml', 'test/data/changes/new.xml');
+----
+person	NULL	NULL	modified	given_names	give-names	given-names
+person_items	keyword	2	added	NULL	NULL	NULL
+works	NULL	0	modified	title	common:title	Revised title
+fundings	NULL	0	removed	NULL	NULL	NULL
+affiliations	employment	0	modified	role_title	employment:role-title	Senior employment:role-title
+
+# ---------------------------------------------------------------- extended_description: two forms of every table
+
+query I
+SELECT (SELECT count(*) FROM orcid_works('test/data/demo/0000-0002-2771-9344.xml'))
+     + (SELECT count(*) FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml'))
+     = (SELECT count(*) FROM records r, orcid_works_xml(r.xml) w);
+----
+true
+
+query I
+SELECT count(*) FROM records r, orcid_changes_xml(r.xml, r.xml) c;
+----
+0
+
+# every record-table row carries the record iD and a SHA-256 of its source document
+query III
+SELECT count(DISTINCT orcid), count(DISTINCT source_hash), min(length(source_hash))
+FROM orcid_external_ids('test/data/demo/*.xml');
+----
+1	1	64
+
+# ---------------------------------------------------------------- README "Comparing two releases"
+# The same iDs in two dump releases, paired with orcid_documents and compared
+# with orcid_changes_xml. Expected rows from the edits in
+# scripts/make_release_fixtures.py, put-codes checked with grep on the source
+# summaries: one title revised, one work group removed (the remaining work
+# moves up from group 2 to 1), a family name and a role title changed, one
+# record removed, one added, one unchanged (no rows).
+
+query II
+SELECT count(*), string_agg(orcid, ',' ORDER BY orcid)
+FROM orcid_documents('test/data/releases/ORCID_2024_10_summaries.tar.gz');
+----
+5	0000-0002-2759-4000,0000-0002-9600-9004,0009-0000-8621-6002,0009-0004-7374-2002,0009-0008-6715-4000
+
+query IIIIIIII
+WITH pairs AS (
+  SELECT orcid, a.xml AS old_xml, b.xml AS new_xml
+  FROM orcid_documents('test/data/releases/ORCID_2024_10_summaries.tar.gz') a
+  FULL JOIN orcid_documents('test/data/releases/ORCID_2025_10_summaries.tar.gz') b USING (orcid))
+SELECT c.orcid, c.section, c.kind, c.put_code, c.change, c.field, c.old_value, c.new_value
+FROM pairs p, orcid_changes_xml(p.old_xml, p.new_xml) c
+ORDER BY c.orcid, c.section, c.put_code, c.field;
+----
+0000-0001-5739-7000	affiliations	employment	8270724	added	NULL	NULL	NULL
+0000-0001-5739-7000	history	NULL	NULL	added	NULL	NULL	NULL
+0000-0001-5739-7000	person	NULL	NULL	added	NULL	NULL	NULL
+0000-0001-5739-7000	works	NULL	148652890	added	NULL	NULL	NULL
+0000-0001-5739-7000	works	NULL	192544449	added	NULL	NULL	NULL
+0000-0002-2759-4000	affiliations	employment	8153114	removed	NULL	NULL	NULL
+0000-0002-2759-4000	affiliations	qualification	8153117	removed	NULL	NULL	NULL
+0000-0002-2759-4000	history	NULL	NULL	removed	NULL	NULL	NULL
+0000-0002-2759-4000	person	NULL	NULL	removed	NULL	NULL	NULL
+0000-0002-2759-4000	works	NULL	58892167	removed	NULL	NULL	NULL
+0000-0002-2759-4000	works	NULL	58892700	removed	NULL	NULL	NULL
+0000-0002-9600-9004	works	NULL	75997177	removed	NULL	NULL	NULL
+0000-0002-9600-9004	works	NULL	75997195	modified	group_index	2	1
+0009-0004-7374-2002	affiliations	employment	26492945	modified	role_title	PhD Researchers	Postdoctoral Researcher
+0009-0004-7374-2002	person	NULL	NULL	modified	family_name	Nademi	Nademi-Rahimi
+0009-0008-6715-4000	works	NULL	164202186	modified	title	Alternative Outcomes, Surprise, and Predicting Replication of PsychologicalResearch	Alternative Outcomes, Surprise, and Predicting Replication of Psychological Research
+
+# orcid_documents: plain files too (member NULL); the iD comes from the path
+query IIII
+SELECT name, member IS NULL, orcid, length(xml) > 0
+FROM orcid_documents('test/data/errors/*.xml') ORDER BY name;
+----
+0000-0001-5272-5001_locked.xml	true	0000-0001-5272-5001	true
+0000-0001-5433-3001_deprecated.xml	true	0000-0001-5433-3001	true
+
+query II
+SELECT count(*), count(orcid) FROM orcid_documents('test/data/dump/orcid_test_summaries.tar.gz', max_records := 2);
+----
+2	2
+
+# description.yml hello_world 6 (and the README query) with members := '*/097/*'
+# replaced by every member: the fixtures hold no iD ending in 097
+query II
+WITH pairs AS (
+  SELECT orcid, a.xml AS old_xml, b.xml AS new_xml
+  FROM orcid_documents('test/data/releases/ORCID_2024_10_summaries.tar.gz', members := '*') a
+  FULL JOIN orcid_documents('test/data/releases/ORCID_2025_10_summaries.tar.gz', members := '*') b USING (orcid))
+SELECT count(*), count(DISTINCT c.orcid)
+FROM (SELECT c.orcid, c.section, c.change, c.field, c.old_value, c.new_value
+      FROM pairs p, orcid_changes_xml(p.old_xml, p.new_xml) c) c;
+----
+16	5
+
+# the prefix filter itself: members of the 2024 release under */000/* (iDs ending in 000)
+query I
+SELECT string_agg(orcid, ',' ORDER BY orcid)
+FROM orcid_documents('test/data/releases/ORCID_2024_10_summaries.tar.gz', members := '*/000/*');
+----
+0000-0002-2759-4000,0009-0008-6715-4000

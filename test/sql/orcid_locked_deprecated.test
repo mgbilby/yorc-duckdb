@@ -1,0 +1,51 @@
+# name: test/sql/orcid_locked_deprecated.test
+# description: locked and deprecated records, which the Public Data File holds as error documents (fixtures from the 2025 summaries, CC0); the iD comes from the message
+# group: [orcid]
+
+require yorc
+
+query IIIIII
+SELECT orcid, response_code, error_code, user_message, container, primary_orcid
+FROM orcid_errors('test/data/errors/0000-0001-5272-5001_locked.xml');
+----
+0000-0001-5272-5001	409	9018	The ORCID record is locked.	NULL	NULL
+
+query IIIII
+SELECT orcid, response_code, error_code, user_message, primary_orcid
+FROM orcid_errors('test/data/errors/0000-0001-5433-3001_deprecated.xml');
+----
+0000-0001-5433-3001	301	9007	This account is deprecated. Please refer to account: https://orcid.org/0009-0008-8963-1314.	0009-0008-8963-1314
+
+# primary_orcid is the last column; the first nine keep their order
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM orcid_errors_xml(NULL)) LIMIT 1 OFFSET 9;
+----
+primary_orcid	VARCHAR
+
+query I
+SELECT string_agg(column_name, ',') FROM (DESCRIBE SELECT * FROM orcid_errors_xml(NULL));
+----
+orcid,response_code,developer_message,user_message,error_code,more_info,container,position,source_hash,primary_orcid
+
+# neither document is a record: no person, history or works rows
+query III
+SELECT (SELECT count(*) FROM orcid_person('test/data/errors/*.xml')),
+       (SELECT count(*) FROM orcid_history('test/data/errors/*.xml')),
+       (SELECT count(*) FROM orcid_works('test/data/errors/*.xml'));
+----
+0	0	0
+
+# lateral form, as the CLIs read stored documents
+query II
+SELECT e.orcid, e.primary_orcid
+FROM read_text('test/data/errors/*.xml') t, orcid_errors_xml(t.content) e
+ORDER BY e.orcid;
+----
+0000-0001-5272-5001	NULL
+0000-0001-5433-3001	0009-0008-8963-1314
+
+# bulk-response errors name no iD: orcid stays NULL
+query II
+SELECT orcid, primary_orcid FROM orcid_errors('reference/orcid-model/record_3.0/samples/read_samples/bulk-work-err.xml');
+----
+NULL	NULL

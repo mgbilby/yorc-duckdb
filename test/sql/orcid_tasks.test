@@ -1,0 +1,350 @@
+# name: test/sql/orcid_tasks.test
+# description: the task bundles of examples/tasks (docs/TASKS.md): each bundle loads, and its macros give the values derived by grep/awk on the fixtures
+# group: [orcid]
+#
+# sqllogictest cannot `.read` a file, so each bundle's statements are copied
+# between the BEGIN/END markers below. `python3 scripts/sync_tasks_test.py`
+# rewrites them from examples/tasks/*.sql, and `--check` fails when they differ.
+#
+# F = test/data/0000-0003-0100-6634.xml (pretty-printed: grep -c counts elements).
+# D = test/data/demo/0000-0002-2771-9344.xml, the record of the worked session
+# in docs/TASKS.md.
+
+require yorc
+
+# ---------------------------------------------------------------- record-health
+
+# BEGIN examples/tasks/record-health.sql
+
+statement ok
+-- One row per iD. A record with no works still gets a row when it has
+-- affiliations or fundings (and the other way round).
+CREATE OR REPLACE MACRO task_health_summary(path) AS TABLE
+    WITH w AS (
+        SELECT orcid, put_code, doi, pub_year, group_index FROM orcid_works(path)),
+    d AS (
+        SELECT orcid, doi, count(*) AS works, count(DISTINCT group_index) AS groups
+        FROM w WHERE doi IS NOT NULL GROUP BY orcid, doi),
+    ws AS (
+        SELECT orcid,
+               count(*)                            AS works,
+               count(*) FILTER (WHERE doi IS NULL)  AS works_without_doi,
+               count(*) FILTER (WHERE pub_year IS NULL) AS works_without_year
+        FROM w GROUP BY orcid),
+    ds AS (
+        SELECT orcid,
+               count(*) FILTER (WHERE works > 1)  AS duplicate_dois,
+               count(*) FILTER (WHERE groups > 1) AS dois_in_several_groups
+        FROM d GROUP BY orcid),
+    a AS (
+        SELECT orcid,
+               count(*) AS affiliations,
+               count(*) FILTER (WHERE org_disambiguated_id IS NULL) AS affiliations_without_org_id,
+               count(*) FILTER (WHERE affiliation_type = 'employment' AND end_year IS NULL) AS current_employments
+        FROM orcid_affiliations(path) GROUP BY orcid),
+    f AS (
+        SELECT orcid,
+               count(*) AS fundings,
+               count(*) FILTER (WHERE org_disambiguated_id IS NULL) AS fundings_without_funder_id
+        FROM orcid_fundings(path) GROUP BY orcid),
+    ids AS (
+        SELECT orcid FROM ws UNION SELECT orcid FROM a UNION SELECT orcid FROM f)
+    SELECT ids.orcid,
+           coalesce(ws.works, 0)                       AS works,
+           coalesce(ws.works_without_doi, 0)           AS works_without_doi,
+           coalesce(ws.works_without_year, 0)          AS works_without_year,
+           coalesce(ds.duplicate_dois, 0)              AS duplicate_dois,
+           coalesce(ds.dois_in_several_groups, 0)      AS dois_in_several_groups,
+           coalesce(a.affiliations, 0)                 AS affiliations,
+           coalesce(a.affiliations_without_org_id, 0)  AS affiliations_without_org_id,
+           coalesce(a.current_employments, 0)          AS current_employments,
+           coalesce(f.fundings, 0)                     AS fundings,
+           coalesce(f.fundings_without_funder_id, 0)   AS fundings_without_funder_id
+    FROM ids
+    LEFT JOIN ws USING (orcid)
+    LEFT JOIN ds USING (orcid)
+    LEFT JOIN a USING (orcid)
+    LEFT JOIN f USING (orcid)
+    ORDER BY ids.orcid;
+
+statement ok
+-- One row per work with at least one issue, the issues as a list:
+-- 'no DOI', 'no publication year', 'DOI shared with another work'.
+CREATE OR REPLACE MACRO task_health_works(path) AS TABLE
+    WITH w AS (
+        SELECT orcid, put_code, group_index, title, doi, pub_year FROM orcid_works(path)),
+    shared AS (
+        SELECT orcid, doi FROM w WHERE doi IS NOT NULL GROUP BY orcid, doi HAVING count(*) > 1),
+    flagged AS (
+        SELECT w.orcid, w.put_code, w.group_index, w.title, w.doi,
+               list_filter([CASE WHEN w.doi IS NULL THEN 'no DOI' END,
+                            CASE WHEN w.pub_year IS NULL THEN 'no publication year' END,
+                            CASE WHEN s.doi IS NOT NULL THEN 'DOI shared with another work' END],
+                           lambda x: x IS NOT NULL) AS issues
+        FROM w LEFT JOIN shared s ON s.orcid = w.orcid AND s.doi = w.doi)
+    SELECT * FROM flagged
+    WHERE len(issues) > 0
+    ORDER BY orcid, group_index, put_code;
+
+# END examples/tasks/record-health.sql
+
+# F: grep -c '<work:work-summary' = 382; 311 of them have a doi/self external id
+# (awk, see orcid_recipes.test recipe 6), so 71 have none; every work has a
+# publication year; 75 DOIs repeat, none across groups; 79 affiliation summaries,
+# 38 with a disambiguation-source; 1 employment without an end year; 7 fundings,
+# 5 with a disambiguation-source
+query IIIIIIIIIII
+SELECT * FROM task_health_summary('test/data/0000-0003-0100-6634.xml');
+----
+0000-0003-0100-6634	382	71	0	75	0	79	41	1	7	2
+
+# 71 works without a DOI + the 160 works whose DOI repeats (sum of the 75 repeat counts)
+query III
+SELECT count(*),
+       count(*) FILTER (WHERE list_contains(issues, 'no DOI')),
+       count(*) FILTER (WHERE list_contains(issues, 'DOI shared with another work'))
+FROM task_health_works('test/data/0000-0003-0100-6634.xml');
+----
+231	71	160
+
+# docs/TASKS.md, the worked session on D: python3 -I (xml.etree) over its 12
+# work summaries: every one has a doi/self id and a publication year;
+# 10.25592/uhhfdm.19102 is on 224052943 and 224052945, both in work group 1;
+# no affiliations, no fundings (empty containers)
+query IIIIIIIIIII
+SELECT * FROM task_health_summary('test/data/demo/0000-0002-2771-9344.xml');
+----
+0000-0002-2771-9344	12	0	0	1	0	0	0	0	0	0
+
+query III
+SELECT put_code, len(issues), issues[1]
+FROM (SELECT put_code, title, issues FROM task_health_works('test/data/demo/0000-0002-2771-9344.xml') LIMIT 5);
+----
+224052943	1	DOI shared with another work
+224052945	1	DOI shared with another work
+
+# a bulk response: both works have a DOI and a year (synthetic fixture), no affiliations
+query IIIIIIIIIII
+SELECT * FROM task_health_summary('test/data/synthetic/coauthors-bulk.xml');
+----
+0000-0002-1825-0097	2	0	0	0	0	0	0	0	0	0
+
+# ---------------------------------------------------------------- doi-dedupe
+
+# BEGIN examples/tasks/doi-dedupe.sql
+
+statement ok
+CREATE OR REPLACE MACRO task_doi_duplicates(path) AS TABLE
+    SELECT orcid, doi,
+           count(*)                          AS works,
+           count(DISTINCT group_index)       AS groups,
+           list(put_code ORDER BY put_code)  AS put_codes
+    FROM orcid_works(path)
+    WHERE doi IS NOT NULL
+    GROUP BY orcid, doi
+    HAVING count(*) > 1
+    ORDER BY works DESC, orcid, doi;
+
+statement ok
+CREATE OR REPLACE MACRO task_doi_cross_group(path) AS TABLE
+    SELECT * FROM task_doi_duplicates(path)
+    WHERE groups > 1;
+
+statement ok
+CREATE OR REPLACE MACRO task_doi_coclaims(path) AS TABLE
+    SELECT doi,
+           count(DISTINCT orcid)                       AS records,
+           list_sort(list(DISTINCT orcid))             AS orcids
+    FROM orcid_works(path)
+    WHERE doi IS NOT NULL
+    GROUP BY doi
+    HAVING count(DISTINCT orcid) > 1
+    ORDER BY records DESC, doi;
+
+# END examples/tasks/doi-dedupe.sql
+
+query IIIII
+SELECT count(*), max(works), sum(works), count(*) FILTER (WHERE groups > 1), min(orcid)
+FROM task_doi_duplicates('test/data/0000-0003-0100-6634.xml');
+----
+75	5	160	0	0000-0003-0100-6634
+
+query III
+SELECT doi, works, groups FROM task_doi_duplicates('test/data/0000-0003-0100-6634.xml') ORDER BY works DESC, doi LIMIT 1;
+----
+10.5281/zenodo.14674399	5	1
+
+query I
+SELECT count(*) FROM task_doi_cross_group('test/data/0000-0003-0100-6634.xml');
+----
+0
+
+# one record only: nothing can be co-claimed
+query I
+SELECT count(*) FROM task_doi_coclaims('test/data/0000-0003-0100-6634.xml');
+----
+0
+
+# ---------------------------------------------------------------- coauthors
+
+# BEGIN examples/tasks/coauthors.sql
+
+statement ok
+CREATE OR REPLACE MACRO task_coauthor_pairs(path) AS TABLE
+    WITH c AS (
+        SELECT DISTINCT source_hash, owner, owner_put_code, contributor_orcid
+        FROM orcid_contributors(path)
+        WHERE contributor_orcid IS NOT NULL)
+    SELECT a.contributor_orcid AS orcid_a,
+           b.contributor_orcid AS orcid_b,
+           count(*)            AS items
+    FROM c a
+    JOIN c b
+      ON a.source_hash = b.source_hash AND a.owner = b.owner
+     AND a.owner_put_code = b.owner_put_code
+     AND a.contributor_orcid < b.contributor_orcid
+    GROUP BY ALL
+    ORDER BY items DESC, orcid_a, orcid_b;
+
+statement ok
+-- Per iD: how many distinct co-authors, over how many pair occurrences.
+CREATE OR REPLACE MACRO task_coauthor_counts(path) AS TABLE
+    WITH p AS (SELECT * FROM task_coauthor_pairs(path)),
+    both_sides AS (
+        SELECT orcid_a AS orcid, orcid_b AS other, items FROM p
+        UNION ALL
+        SELECT orcid_b, orcid_a, items FROM p)
+    SELECT orcid, count(DISTINCT other) AS coauthors, sum(items) AS items
+    FROM both_sides
+    GROUP BY orcid
+    ORDER BY coauthors DESC, orcid;
+
+# END examples/tasks/coauthors.sql
+
+# test/data/synthetic/coauthors-bulk.xml: work 101 lists 1825-0097 and 5109-3700
+# (and a contributor without an iD); work 102 lists 5109-3700, 1694-233X, 1825-0097
+query III
+SELECT * FROM task_coauthor_pairs('test/data/synthetic/coauthors-bulk.xml') ORDER BY items DESC, orcid_a, orcid_b;
+----
+0000-0001-5109-3700	0000-0002-1825-0097	2
+0000-0001-5109-3700	0000-0002-1694-233X	1
+0000-0002-1694-233X	0000-0002-1825-0097	1
+
+query III
+SELECT * FROM task_coauthor_counts('test/data/synthetic/coauthors-bulk.xml') ORDER BY orcid;
+----
+0000-0001-5109-3700	2	3
+0000-0002-1694-233X	2	2
+0000-0002-1825-0097	2	3
+
+# summaries list no contributors
+query I
+SELECT count(*) FROM task_coauthor_pairs('test/data/0000-0003-0100-6634.xml');
+----
+0
+
+# ---------------------------------------------------------------- affiliation-timeline
+
+# BEGIN examples/tasks/affiliation-timeline.sql
+
+statement ok
+CREATE OR REPLACE MACRO task_affiliation_timeline(path) AS TABLE
+    SELECT orcid, affiliation_type, org_name, role_title, department,
+           start_year, end_year,
+           end_year - start_year AS years,
+           end_year IS NULL AND affiliation_type <> 'distinction' AS is_current
+    FROM orcid_affiliations(path)
+    ORDER BY orcid, start_year NULLS LAST, end_year NULLS LAST, affiliation_type, put_code;
+
+statement ok
+CREATE OR REPLACE MACRO task_affiliation_current(path) AS TABLE
+    SELECT * FROM task_affiliation_timeline(path)
+    WHERE is_current;
+
+# END examples/tasks/affiliation-timeline.sql
+
+# F, awk over the five affiliation types' summaries: summaries without an
+# end-date year: distinction 7 (never current), education 1, employment 1,
+# membership 4, service 1
+query II
+SELECT count(*), count(*) FILTER (WHERE is_current)
+FROM task_affiliation_timeline('test/data/0000-0003-0100-6634.xml');
+----
+79	7
+
+query II
+SELECT affiliation_type, count(*) FROM task_affiliation_current('test/data/0000-0003-0100-6634.xml')
+GROUP BY ALL ORDER BY affiliation_type;
+----
+education	1
+employment	1
+membership	4
+service	1
+
+# record-3.0.xml sample: the timeline starts with the 1948 starts; invited-position starts 2019
+query III
+SELECT affiliation_type, start_year, is_current
+FROM task_affiliation_timeline('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')
+WHERE affiliation_type IN ('invited-position', 'membership', 'distinction')
+ORDER BY affiliation_type;
+----
+distinction	1948	false
+invited-position	2019	false
+membership	1948	true
+
+# ---------------------------------------------------------------- release-changes
+
+# BEGIN examples/tasks/release-changes.sql
+
+statement ok
+CREATE OR REPLACE MACRO task_release_changes(old_path, new_path, members) AS TABLE
+    WITH pairs AS (
+        SELECT orcid, a.xml AS old_xml, b.xml AS new_xml
+        FROM orcid_documents(old_path, members := members) a
+        FULL JOIN orcid_documents(new_path, members := members) b USING (orcid))
+    SELECT c.*
+    FROM pairs p, orcid_changes_xml(p.old_xml, p.new_xml) c;
+
+statement ok
+CREATE OR REPLACE MACRO task_release_change_summary(old_path, new_path, members) AS TABLE
+    SELECT section, change, count(*) AS items, count(DISTINCT orcid) AS records
+    FROM task_release_changes(old_path, new_path, members)
+    GROUP BY ALL
+    ORDER BY section, change;
+
+# END examples/tasks/release-changes.sql
+
+# the 16 rows of orcid_docs_examples.test ("Comparing two releases"), tallied
+query IIII
+SELECT * FROM task_release_change_summary('test/data/releases/ORCID_2024_10_summaries.tar.gz',
+                                          'test/data/releases/ORCID_2025_10_summaries.tar.gz', '*.xml')
+ORDER BY section, change;
+----
+affiliations	added	1	1
+affiliations	modified	1	1
+affiliations	removed	2	1
+history	added	1	1
+history	removed	1	1
+person	added	1	1
+person	modified	1	1
+person	removed	1	1
+works	added	2	1
+works	modified	2	2
+works	removed	3	2
+
+query II
+SELECT count(*), count(DISTINCT orcid)
+FROM task_release_changes('test/data/releases/ORCID_2024_10_summaries.tar.gz',
+                          'test/data/releases/ORCID_2025_10_summaries.tar.gz', '*.xml');
+----
+16	5
+
+# the iD-prefix form: tar -tzf lists */000/ members 2759-4000 and 6715-4000 in 2024,
+# 5739-7000 and 6715-4000 in 2025: 2759-4000 removed (6 rows), 5739-7000 added
+# (5 rows), 6715-4000 one modified work (the rows of orcid_docs_examples.test)
+query II
+SELECT count(*), count(DISTINCT orcid)
+FROM task_release_changes('test/data/releases/ORCID_2024_10_summaries.tar.gz',
+                          'test/data/releases/ORCID_2025_10_summaries.tar.gz', '*/000/*');
+----
+12	3

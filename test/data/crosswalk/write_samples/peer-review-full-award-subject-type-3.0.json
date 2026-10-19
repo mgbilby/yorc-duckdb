@@ -1,0 +1,65 @@
+{
+  "convening-organization": {
+    "address": {
+      "city": "Bethesda",
+      "country": "US",
+      "region": "MD"
+    },
+    "disambiguated-organization": {
+      "disambiguated-organization-identifier": "385488",
+      "disambiguation-source": "RINGGOLD"
+    },
+    "name": "ORCID"
+  },
+  "review-completion-date": {
+    "day": {
+      "value": "01"
+    },
+    "month": {
+      "value": "08"
+    },
+    "year": {
+      "value": "2012"
+    }
+  },
+  "review-group-id": "issn:1741-4857",
+  "review-identifiers": {
+    "external-id": [
+      {
+        "external-id-relationship": "self",
+        "external-id-type": "source-work-id",
+        "external-id-url": {
+          "value": "https://localsystem.org/1234"
+        },
+        "external-id-value": "1234"
+      }
+    ]
+  },
+  "review-type": "review",
+  "review-url": {
+    "value": "https://alt-url.com"
+  },
+  "reviewer-role": "reviewer",
+  "subject-container-name": "Award title",
+  "subject-external-identifier": {
+    "external-id-relationship": "self",
+    "external-id-type": "doi",
+    "external-id-url": {
+      "value": "https://doi.org/10.1087/20120404"
+    },
+    "external-id-value": "10.1087/20120404"
+  },
+  "subject-name": {
+    "title": {
+      "value": "Name of the paper reviewed"
+    },
+    "translated-title": {
+      "language-code": "en",
+      "value": "Translated title"
+    }
+  },
+  "subject-type": "award",
+  "subject-url": {
+    "value": "https://subject-alt-url.com"
+  }
+}

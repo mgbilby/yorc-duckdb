@@ -1,0 +1,129 @@
+{
+  "proposal": {
+    "end-date": {
+      "day": {
+        "value": "02"
+      },
+      "month": {
+        "value": "02"
+      },
+      "year": {
+        "value": "2012"
+      }
+    },
+    "external-ids": {
+      "external-id": [
+        {
+          "external-id-relationship": "self",
+          "external-id-type": "source-work-id",
+          "external-id-value": "123456"
+        },
+        {
+          "external-id-relationship": "self",
+          "external-id-type": "handle",
+          "external-id-value": "https://grants.net/123456"
+        }
+      ]
+    },
+    "hosts": {
+      "organization": [
+        {
+          "address": {
+            "city": "Bethesda",
+            "country": "US",
+            "region": "Maryland"
+          },
+          "disambiguated-organization": {
+            "disambiguated-organization-identifier": "grid.455335.1",
+            "disambiguation-source": "GRID"
+          },
+          "name": "ORCID"
+        }
+      ]
+    },
+    "start-date": {
+      "day": {
+        "value": "02"
+      },
+      "month": {
+        "value": "02"
+      },
+      "year": {
+        "value": "1999"
+      }
+    },
+    "title": {
+      "title": {
+        "value": "Giant Laser Award"
+      }
+    },
+    "url": {
+      "value": "http://xsede.org/GiantLaserAward"
+    }
+  },
+  "resource-item": [
+    {
+      "external-ids": {
+        "external-id": [
+          {
+            "external-id-relationship": "self",
+            "external-id-type": "rrid",
+            "external-id-value": "rrid:giantLASER"
+          },
+          {
+            "external-id-relationship": "self",
+            "external-id-type": "doi",
+            "external-id-value": "https://doi.org/10.123/giantlaser"
+          }
+        ]
+      },
+      "hosts": {
+        "organization": [
+          {
+            "address": {
+              "city": "Bethesda",
+              "country": "US",
+              "region": "Maryland"
+            },
+            "disambiguated-organization": {
+              "disambiguated-organization-identifier": "grid.455335.1",
+              "disambiguation-source": "GRID"
+            },
+            "name": "Lasers-R-US"
+          }
+        ]
+      },
+      "resource-name": "Giant Laser 1",
+      "resource-type": "infrastructures"
+    },
+    {
+      "external-ids": {
+        "external-id": [
+          {
+            "external-id-relationship": "part-of",
+            "external-id-type": "uri",
+            "external-id-value": "https://moon.org/targetOnTheMoon"
+          }
+        ]
+      },
+      "hosts": {
+        "organization": [
+          {
+            "address": {
+              "city": "Bethesda",
+              "country": "US",
+              "region": "Maryland"
+            },
+            "disambiguated-organization": {
+              "disambiguated-organization-identifier": "grid.455335.1",
+              "disambiguation-source": "GRID"
+            },
+            "name": "Moon Holdings Ltd"
+          }
+        ]
+      },
+      "resource-name": "Moon Targets",
+      "resource-type": "infrastructures"
+    }
+  ]
+}

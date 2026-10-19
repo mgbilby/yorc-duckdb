@@ -1,0 +1,76 @@
+yorc-duckdb
+Copyright © 2026 Mark G. Bilby. Licensed under the MIT License
+(see LICENSE). https://github.com/mgbilby/yorc-duckdb
+
+Specifications
+--------------
+The parser and extractors are written from public specifications only:
+  - ORCID Message Schema v3.0 (https://github.com/ORCID/orcid-model)
+  - ORCID iD structure and check digit, ISO/IEC 7064:2003 MOD 11-2
+    (https://support.orcid.org/hc/en-us/articles/360006897674)
+  - XML 1.0 (Fifth Edition), W3C Recommendation
+  - RFC 8259, The JavaScript Object Notation (JSON) Data Interchange Format,
+    and RFC 3629, UTF-8 (the JSON parser, writer and escaping)
+  - FIPS 180-4, Secure Hash Standard (SHA-256)
+  - POSIX.1-2001 ustar / pax interchange format and the GNU tar long-name
+    extension (for reading .tar / .tar.gz dumps)
+No code or test data was copied from other ORCID, XML or JSON software.
+
+Third-party material in this repository
+---------------------------------------
+reference/orcid-model/
+  The ORCID message schema v3.0 (XSDs, README and samples for record_3.0,
+  common_3.0, summary_3.0, notification_3.0 and group-id-3.0), copied
+  unmodified from https://github.com/ORCID/orcid-model at commit
+  9592e2d3bde21a1edf703f26f8bc304448f886fb.
+  Copyright © 2012-2018 ORCID, Inc. ORCID MIT-style license:
+  reference/orcid-model/LICENSE. Provenance: reference/orcid-model/PROVENANCE.md.
+
+reference/orcid-dumps/index.csv
+  File listing (names, sizes, MD5s, URLs) of the ORCID Public Data File
+  releases as published by ORCID on figshare (https://orcid.figshare.com/).
+  The data files themselves are released by ORCID under CC0 1.0.
+
+Test data
+---------
+test/data/0000-0003-0100-6634.xml is the public ORCID record of
+0000-0003-0100-6634 as returned by https://pub.orcid.org/v3.0/. ORCID makes
+public record data available under CC0 1.0
+(https://info.orcid.org/documentation/integration-guide/orcid-public-data-file/).
+
+test/data/demo/0000-0002-2771-9344.xml is the public ORCID record of
+0000-0002-2771-9344 (a fictitious person's record that ORCID uses as an
+example), as returned by https://pub.orcid.org/v3.0/0000-0002-2771-9344/record,
+unmodified (byte-identical to yorc-rs's tests/data/0000-0002-2771-9344.xml);
+CC0 1.0 like the record above. The walkthrough, the recipes and the task
+bundles' worked example read it.
+
+Files under test/data/activities/ are single activity items (for example one
+full work) taken unmodified from the ORCID Public Data File activities archive,
+which ORCID releases under CC0 1.0.
+
+test/data/changes/old.xml is the ORCID sample record
+reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml (fictitious
+iD 8888-8888-8888-8880); new.xml is an edited copy of it, made for the
+orcid_changes tests.
+
+test/data/dump/ holds two small archives in the layout of the ORCID Public Data
+File, built for the tests from the two records above plus synthetic members
+(long names, non-XML files).
+
+Files under test/data/errors/ are the summaries of a locked and a deprecated
+record (error documents) taken unmodified from the ORCID Public Data File 2025
+summaries archive, which ORCID releases under CC0 1.0.
+
+test/data/json/orcid_test_json.tar is a tar archive, built for the tests,
+of two ORCID schema samples (reference/orcid-model, ORCID MIT-style license)
+and a one-line text file.
+
+test/data/synthetic/coauthors-bulk.xml was written by hand for this repository
+(two invented works in a bulk response, to the ORCID work and bulk XSDs) and is
+covered by its MIT license.
+
+test/data/releases/ holds two synthetic Public Data File "releases" built by
+scripts/make_release_fixtures.py from six summaries of the ORCID Public Data
+File 2025 (CC0 1.0): the 2024 archive has five of them unchanged, the 2025
+archive applies the edits listed in that script.

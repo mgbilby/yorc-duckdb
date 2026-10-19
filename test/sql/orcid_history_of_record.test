@@ -1,0 +1,93 @@
+# name: test/sql/orcid_history_of_record.test
+# description: orcid_timeline (one snapshot) and orcid_changes (two snapshots)
+# group: [orcid]
+
+require yorc
+
+# ---------------------------------------------------------------- timeline
+
+query IIII
+SELECT count(*), count(*) FILTER (WHERE event = 'created'), count(*) FILTER (WHERE event = 'modified'),
+       count(DISTINCT kind)
+FROM orcid_timeline('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml');
+----
+20	18	2	19
+
+query IIII
+SELECT event_at, event, kind, label
+FROM orcid_timeline('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')
+WHERE event_at > '2002' ORDER BY event_at;
+----
+2015-06-25T16:01:12.718Z	created	research-resource	Giant Laser Award
+2017-09-08T13:31:19.987Z	modified	research-resource	Giant Laser Award
+
+query II
+SELECT kind, label FROM orcid_timeline('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')
+WHERE kind IN ('employment', 'keyword', 'name') ORDER BY kind;
+----
+employment	employment:role-title
+keyword	keyword1
+name	give-names
+
+# your record: one row per work at least (each work has a created date)
+query I
+SELECT count(*) >= 382 FROM orcid_timeline('test/data/0000-0003-0100-6634.xml') WHERE kind = 'work';
+----
+true
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_timeline_xml(NULL));
+----
+13
+
+# ---------------------------------------------------------------- changes
+
+query IIIIIIII
+SELECT section, kind, put_code, change, field, old_value, new_value, label
+FROM orcid_changes('test/data/changes/old.xml', 'test/data/changes/new.xml');
+----
+person	NULL	NULL	modified	given_names	give-names	given-names	given-names
+person_items	keyword	2	added	NULL	NULL	NULL	keyword2
+works	NULL	0	modified	title	common:title	Revised title	Revised title
+fundings	NULL	0	removed	NULL	NULL	NULL	common:title
+affiliations	employment	0	modified	role_title	employment:role-title	Senior employment:role-title	Senior employment:role-title
+
+# identical snapshots: no changes
+query I
+SELECT count(*) FROM orcid_changes('test/data/changes/old.xml', 'test/data/changes/old.xml');
+----
+0
+
+# reversing the direction swaps added/removed
+query II
+SELECT change, section FROM orcid_changes('test/data/changes/new.xml', 'test/data/changes/old.xml')
+WHERE change <> 'modified' ORDER BY section;
+----
+added	fundings
+removed	person_items
+
+# snapshots held in a table (e.g. one per Public Data File release)
+statement ok
+CREATE TABLE snapshots AS
+SELECT 2024 AS release, content AS xml FROM read_text('test/data/changes/old.xml')
+UNION ALL
+SELECT 2025, content FROM read_text('test/data/changes/new.xml');
+
+query II
+SELECT count(*), count(DISTINCT section)
+FROM snapshots a JOIN snapshots b ON b.release = a.release + 1, orcid_changes_xml(a.xml, b.xml) c;
+----
+5	5
+
+# a constant pair goes through the table-scan path (must terminate)
+query I
+SELECT count(*) FROM orcid_changes_xml('<record:record path="/x"/>', '<record:record path="/x"/>');
+----
+0
+
+# NULL on one side: everything on the other side is added
+query I
+SELECT count(*) FILTER (WHERE change = 'added')
+FROM read_text('test/data/changes/new.xml') t, orcid_changes_xml(NULL, t.content) c;
+----
+19

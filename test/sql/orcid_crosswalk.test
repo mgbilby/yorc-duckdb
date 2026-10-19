@@ -1,0 +1,372 @@
+# name: test/sql/orcid_crosswalk.test
+# description: crosswalk mode of the writers (SET orcid_crosswalk, the trailing BOOLEAN argument): every XML write sample, read and written back, gives exactly yorc-rs's document bytes, in XML and in JSON; the default output is unchanged
+# group: [orcid]
+#
+# Method: each of ORCID's 21 XML write samples is read with the section
+# readers, assembled into the writer's input as test/sql/orcid_write.test does
+# (the item row as a STRUCT, its external ids, contributors and resource items
+# as LIST(STRUCT) fields), written with crosswalk on, and compared with
+# test/data/crosswalk/write_samples/<stem>.{xml,json}.
+#
+# Those expected bytes are yorc-rs's output for the same sample
+# (xml::to_string / json::to_string; the write samples carry none of ORCID's
+# read-only fields, which these writers leave out), derived without
+# running it: scripts/crosswalk_expected.py applies yorc-rs's writing
+# rules (src/xml/write.rs, src/json.rs) to the sample's canonical tree, which
+# yorc-rs's tests/write_roundtrip.rs pins (`write_samples_round_trip`:
+# its written document is canonically the sample). yorc-rs's
+# tests pin no exact bytes for the samples. The authoritative comparison is
+# the cross-implementation check (BENCHMARKS.md, "Parity"), which compares this mode
+# with the real Rust and Zig output byte for byte (classes "written XML
+# bytes" and "written JSON bytes").
+
+require yorc
+
+statement ok
+CREATE TABLE docs AS
+SELECT regexp_extract(name, '^(.*)\.xml$', 1) AS stem, xml AS doc, sha256(xml) AS h
+FROM orcid_documents('reference/orcid-model/record_3.0/samples/write_samples/*.xml');
+
+query I
+SELECT count(*) FROM docs;
+----
+21
+
+statement ok
+CREATE TABLE expected AS
+SELECT regexp_extract(filename, '([^/]+)\.(xml|json)$', 1) AS stem, regexp_extract(filename, '\.(xml|json)$', 1) AS fmt,
+       content
+FROM read_text('test/data/crosswalk/write_samples/*');
+
+query II
+SELECT count(*), count(DISTINCT stem) FROM expected;
+----
+42	21
+
+# ---------------------------------------------------------------- the setting: off by default
+
+query I
+SELECT current_setting('orcid_crosswalk');
+----
+false
+
+# ---------------------------------------------------------------- read every sample into the writers' input
+
+# works: work-full, work-simple
+statement ok
+CREATE TABLE src_works AS SELECT w.* FROM (SELECT doc FROM docs WHERE stem LIKE 'work-%') d, orcid_works_xml(d.doc) w;
+
+statement ok
+CREATE TABLE src_work_ids AS SELECT e.* FROM (SELECT doc FROM docs WHERE stem LIKE 'work-%') d, orcid_external_ids_xml(d.doc) e;
+
+statement ok
+CREATE TABLE src_work_contributors AS
+SELECT c.* FROM (SELECT doc FROM docs WHERE stem LIKE 'work-%') d, orcid_contributors_xml(d.doc) c;
+
+statement ok
+CREATE TABLE rec_works AS
+SELECT (SELECT stem FROM docs WHERE h = w.source_hash) AS stem,
+       struct_insert(w,
+           external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_work_ids e WHERE e.source_hash = w.source_hash),
+           contributors := (SELECT list(c ORDER BY c.ordinal) FROM src_work_contributors c WHERE c.source_hash = w.source_hash)) AS rec
+FROM src_works w;
+
+# fundings: funding-3.0 (no contributors)
+statement ok
+CREATE TABLE src_fundings AS SELECT f.* FROM (SELECT doc FROM docs WHERE stem = 'funding-3.0') d, orcid_fundings_xml(d.doc) f;
+
+statement ok
+CREATE TABLE src_funding_ids AS SELECT e.* FROM (SELECT doc FROM docs WHERE stem = 'funding-3.0') d, orcid_external_ids_xml(d.doc) e;
+
+statement ok
+CREATE TABLE rec_fundings AS
+SELECT (SELECT stem FROM docs WHERE h = f.source_hash) AS stem,
+       struct_insert(f, external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_funding_ids e WHERE e.source_hash = f.source_hash)) AS rec
+FROM src_fundings f;
+
+# the seven affiliation types
+statement ok
+CREATE TABLE aff_docs AS
+SELECT * FROM docs WHERE stem IN ('distinction-3.0', 'education-3.0', 'employment-3.0', 'invited-position-3.0',
+                                  'membership-3.0', 'qualification-3.0', 'service-3.0');
+
+statement ok
+CREATE TABLE src_affiliations AS SELECT a.* FROM (SELECT doc FROM aff_docs) d, orcid_affiliations_xml(d.doc) a;
+
+statement ok
+CREATE TABLE src_affiliation_ids AS SELECT e.* FROM (SELECT doc FROM aff_docs) d, orcid_external_ids_xml(d.doc) e;
+
+statement ok
+CREATE TABLE rec_affiliations AS
+SELECT (SELECT stem FROM docs WHERE h = a.source_hash) AS stem,
+       struct_insert(a, external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_affiliation_ids e WHERE e.source_hash = a.source_hash)) AS rec
+FROM src_affiliations a;
+
+# peer reviews: full, award subject, simple; the subject identifier is the external_ids item of container 'peer-review'
+statement ok
+CREATE TABLE src_peer_reviews AS
+SELECT p.* FROM (SELECT doc FROM docs WHERE stem LIKE 'peer-review-%') d, orcid_peer_reviews_xml(d.doc) p;
+
+statement ok
+CREATE TABLE src_peer_review_ids AS
+SELECT e.* FROM (SELECT doc FROM docs WHERE stem LIKE 'peer-review-%') d, orcid_external_ids_xml(d.doc) e;
+
+statement ok
+CREATE TABLE rec_peer_reviews AS
+SELECT (SELECT stem FROM docs WHERE h = p.source_hash) AS stem,
+       struct_insert(p, external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_peer_review_ids e WHERE e.source_hash = p.source_hash)) AS rec
+FROM src_peer_reviews p;
+
+# Row order: these tables number rows by rowid, so they read with the constant-argument
+# form, which keeps document order. The lateral form (FROM docs d, orcid_x(d.doc)) may be
+# planned as a join that returns one document's rows in reverse (DuckDB v1.5.6 does so
+# for research-resource-3.0 and bulk-work-3.0).
+#
+# research resource: the external ids by document order (grep -c '<common:external-id>'): the
+# proposal's 2, then the items' 2 and 1, as in orcid_write.test; one host each (flat host_* fields)
+statement ok
+CREATE TABLE src_rr AS SELECT r.* FROM (SELECT doc FROM docs WHERE stem = 'research-resource-3.0') d, orcid_research_resources_xml(d.doc) r;
+
+statement ok
+CREATE TABLE src_rr_items AS
+SELECT i.* FROM (SELECT doc FROM docs WHERE stem = 'research-resource-3.0') d, orcid_research_resource_items_xml(d.doc) i;
+
+statement ok
+CREATE TABLE src_rr_ids AS SELECT * FROM orcid_external_ids_xml((SELECT doc FROM docs WHERE stem = 'research-resource-3.0'));
+
+statement ok
+CREATE TABLE rr_ids AS
+SELECT id, n, CASE WHEN n <= 2 THEN 0 WHEN n <= 4 THEN 1 ELSE 2 END AS item
+FROM (SELECT e AS id, row_number() OVER (ORDER BY rowid) AS n FROM src_rr_ids e);
+
+query III
+SELECT (SELECT count(*) FROM src_rr), (SELECT count(*) FROM src_rr_items), (SELECT count(*) FROM rr_ids);
+----
+1	2	5
+
+statement ok
+CREATE TABLE rec_rr AS
+SELECT 'research-resource-3.0' AS stem,
+       struct_insert(r,
+           external_ids := (SELECT list(id ORDER BY n) FROM rr_ids WHERE item = 0),
+           resource_items := (SELECT list(struct_insert(i, external_ids := (SELECT list(id ORDER BY n) FROM rr_ids WHERE item = i.ordinal))
+                                          ORDER BY i.ordinal)
+                              FROM src_rr_items i)) AS rec
+FROM src_rr r;
+
+# person items: address, keyword, other name, researcher url (with and without a name), external identifier
+statement ok
+CREATE TABLE src_person_items AS
+SELECT p.* FROM (SELECT doc FROM docs WHERE stem IN ('address-3.0', 'keyword-3.0', 'other-name-3.0', 'researcher-url-3.0',
+                                                     'researcher-url-3.0-no-name', 'external-identifier-3.0')) d,
+               orcid_person_items_xml(d.doc) p;
+
+query I
+SELECT count(*) FROM src_person_items;
+----
+6
+
+statement ok
+CREATE TABLE rec_person_items AS SELECT (SELECT stem FROM docs WHERE h = q.source_hash) AS stem, q AS rec FROM src_person_items q;
+
+# bulk-work-3.0: two works, one external id each (grep -c '<common:external-id>')
+statement ok
+CREATE TABLE src_bulk_works AS SELECT * FROM orcid_works_xml((SELECT doc FROM docs WHERE stem = 'bulk-work-3.0'));
+
+statement ok
+CREATE TABLE src_bulk_ids AS SELECT * FROM orcid_external_ids_xml((SELECT doc FROM docs WHERE stem = 'bulk-work-3.0'));
+
+statement ok
+CREATE TABLE rec_bulk AS
+SELECT wn.n,
+       struct_insert(w, external_ids := (SELECT list(e) FROM src_bulk_ids e
+                                         JOIN (SELECT rowid AS rid, row_number() OVER (ORDER BY rowid) AS n FROM src_bulk_ids) en
+                                           ON en.rid = e.rowid
+                                         WHERE en.n = wn.n)) AS rec
+FROM src_bulk_works w
+JOIN (SELECT rowid AS rid, row_number() OVER (ORDER BY rowid) AS n FROM src_bulk_works) wn ON wn.rid = w.rowid;
+
+query II
+SELECT (SELECT count(*) FROM rec_bulk), (SELECT count(*) FROM src_bulk_ids);
+----
+2	2
+
+# ---------------------------------------------------------------- crosswalk on, by argument: yorc-rs's bytes
+
+statement ok
+CREATE TABLE written (stem VARCHAR, fmt VARCHAR, text VARCHAR);
+
+statement ok
+INSERT INTO written
+SELECT stem, 'xml', orcid_work_to_xml(rec, true) FROM rec_works
+UNION ALL SELECT stem, 'json', orcid_work_to_json(rec, true) FROM rec_works
+UNION ALL SELECT stem, 'xml', orcid_funding_to_xml(rec, true) FROM rec_fundings
+UNION ALL SELECT stem, 'json', orcid_funding_to_json(rec, true) FROM rec_fundings
+UNION ALL SELECT stem, 'xml', orcid_affiliation_to_xml(rec, true) FROM rec_affiliations
+UNION ALL SELECT stem, 'json', orcid_affiliation_to_json(rec, true) FROM rec_affiliations
+UNION ALL SELECT stem, 'xml', orcid_peer_review_to_xml(rec, true) FROM rec_peer_reviews
+UNION ALL SELECT stem, 'json', orcid_peer_review_to_json(rec, true) FROM rec_peer_reviews
+UNION ALL SELECT stem, 'xml', orcid_research_resource_to_xml(rec, true) FROM rec_rr
+UNION ALL SELECT stem, 'json', orcid_research_resource_to_json(rec, true) FROM rec_rr
+UNION ALL SELECT stem, 'xml', orcid_person_item_to_xml(rec, true) FROM rec_person_items
+UNION ALL SELECT stem, 'json', orcid_person_item_to_json(rec, true) FROM rec_person_items
+UNION ALL SELECT 'bulk-work-3.0', 'xml', orcid_bulk_works_to_xml(list(rec ORDER BY n), true) FROM rec_bulk
+UNION ALL SELECT 'bulk-work-3.0', 'json', orcid_bulk_works_to_json(list(rec ORDER BY n), true) FROM rec_bulk;
+
+query II
+SELECT count(*), count(DISTINCT stem) FROM written WHERE text IS NOT NULL;
+----
+42	21
+
+# every document byte for byte (the list names the ones that differ)
+query I
+SELECT coalesce(string_agg(e.stem || '.' || e.fmt, ' ' ORDER BY e.stem, e.fmt), 'none')
+FROM expected e LEFT JOIN written o USING (stem, fmt)
+WHERE o.text IS DISTINCT FROM e.content;
+----
+none
+
+# one in full: yorc-rs's layout (two spaces, the namespaces used, final LF)
+query I
+SELECT replace(text, chr(10), '\n') FROM written WHERE stem = 'keyword-3.0' AND fmt = 'xml';
+----
+<?xml version="1.0" encoding="UTF-8"?>\n<keyword:keyword xmlns:keyword="http://www.orcid.org/ns/keyword">\n  <keyword:content>keyword1</keyword:content>\n</keyword:keyword>\n
+
+query I
+SELECT replace(text, chr(10), '\n') FROM written WHERE stem = 'researcher-url-3.0' AND fmt = 'json';
+----
+{\n  "url": {\n    "value": "https://site1.com/"\n  },\n  "url-name": "Site # 1"\n}\n
+
+# ---------------------------------------------------------------- the default is unchanged
+
+# no argument, false and the setting off are all the default layout
+query I
+SELECT count(*) FROM rec_works
+WHERE orcid_work_to_xml(rec) IS DISTINCT FROM orcid_work_to_xml(rec, false)
+   OR orcid_work_to_json(rec) IS DISTINCT FROM orcid_work_to_json(rec, false);
+----
+0
+
+query I
+SELECT replace(replace(orcid_work_to_xml({'title': 'T', 'type': 'other'}), chr(10), '\n'), chr(9), '\t');
+----
+<?xml version="1.0" encoding="UTF-8"?>\n<work:work xmlns:common="http://www.orcid.org/ns/common" xmlns:work="http://www.orcid.org/ns/work">\n\t<work:title>\n\t\t<common:title>T</common:title>\n\t</work:title>\n\t<work:type>other</work:type>\n</work:work>\n
+
+query I
+SELECT replace(replace(orcid_work_to_xml({'title': 'T', 'type': 'other'}, true), chr(10), '\n'), chr(9), '\t');
+----
+<?xml version="1.0" encoding="UTF-8"?>\n<work:work xmlns:common="http://www.orcid.org/ns/common" xmlns:work="http://www.orcid.org/ns/work">\n  <work:title>\n    <common:title>T</common:title>\n  </work:title>\n  <work:type>other</work:type>\n</work:work>\n
+
+# JSON: schema order by default, sorted keys in crosswalk mode
+query II
+SELECT replace(orcid_funding_to_json({'type': 'grant', 'amount': '10', 'currency': 'EUR', 'org_name': 'O'}), chr(10), '\n'),
+       replace(orcid_funding_to_json({'type': 'grant', 'amount': '10', 'currency': 'EUR', 'org_name': 'O'}, true), chr(10), '\n');
+----
+{\n  "type": "grant",\n  "amount": {\n    "value": "10",\n    "currency-code": "EUR"\n  },\n  "organization": {\n    "name": "O",\n    "address": {}\n  }\n}\n	{\n  "amount": {\n    "currency-code": "EUR",\n    "value": "10"\n  },\n  "organization": {\n    "address": {},\n    "name": "O"\n  },\n  "type": "grant"\n}\n
+
+# the default XML of a sample differs from yorc-rs's only in its indentation (white space after a
+# line break removed on both sides; work-full's citation-value has tabs of its own)
+query I
+SELECT count(*) FROM rec_works r JOIN written o ON o.stem = r.stem AND o.fmt = 'xml'
+WHERE regexp_replace(orcid_work_to_xml(r.rec), '\n[\t ]+', chr(10), 'g') <> regexp_replace(o.text, '\n[\t ]+', chr(10), 'g');
+----
+0
+
+# a NULL argument gives NULL, as a NULL record does
+query II
+SELECT orcid_work_to_xml({'title': 'T', 'type': 'other'}, NULL) IS NULL, orcid_bulk_works_to_json(NULL, true) IS NULL;
+----
+true	true
+
+# the writers' checks are the same in both modes
+statement error
+SELECT orcid_work_to_xml({'type': 'other'}, true);
+----
+'title' is required
+
+statement error
+SELECT orcid_work_to_xml({'title': 'bell' || chr(1), 'type': 'other'}, true);
+----
+cannot be written in XML 1.0
+
+# escaping: serde_json writes DEL raw, the default \u007f; XML as before (CR as &#13;)
+query III
+SELECT contains(orcid_work_to_json({'title': 'del' || chr(127), 'type': 'other'}, true), '"value": "del' || chr(127) || '"'),
+       contains(orcid_work_to_json({'title': 'del' || chr(127), 'type': 'other'}), '"value": "del\u007f"'),
+       contains(orcid_work_to_xml({'title': 'a' || chr(13) || 'b', 'type': 'other', 'visibility': 'p"'}, true),
+                ' visibility="p&quot;">' || chr(10) || '  <work:title>' || chr(10) || '    <common:title>a&#13;b</common:title>');
+----
+true	true	true
+
+# put-code: a number in JSON, normalized as yorc-rs's i64 prints it
+query II
+SELECT contains(orcid_work_to_json({'put_code': '007', 'title': 'T', 'type': 'other'}, true), '"put-code": 7,'),
+       contains(orcid_work_to_xml({'put_code': '007', 'title': 'T', 'type': 'other'}, true), ' put-code="7">');
+----
+true	true
+
+statement error
+SELECT orcid_work_to_xml({'put_code': '9223372036854775808', 'title': 'T', 'type': 'other'}, true);
+----
+outside yorc-rs's put-code range
+
+# containers yorc-rs always writes hold an empty array when empty (json.rs req_ext_ids)
+query II
+SELECT contains(orcid_peer_review_to_json({'reviewer_role': 'reviewer', 'review_type': 'review', 'completion_year': 2012,
+                                           'review_group_id': 'issn:1741-4857', 'convening_org_name': 'O'}, true),
+                '"review-identifiers": {' || chr(10) || '    "external-id": []' || chr(10) || '  }'),
+       contains(orcid_peer_review_to_json({'reviewer_role': 'reviewer', 'review_type': 'review', 'completion_year': 2012,
+                                           'review_group_id': 'issn:1741-4857', 'convening_org_name': 'O'}),
+                '"review-identifiers": {}');
+----
+true	true
+
+# ---------------------------------------------------------------- SET orcid_crosswalk = true: every writer, unless the argument says otherwise
+
+statement ok
+CREATE TABLE default_out AS
+SELECT stem, orcid_work_to_xml(rec) AS x, orcid_work_to_json(rec) AS j FROM rec_works;
+
+statement ok
+SET orcid_crosswalk = true;
+
+query I
+SELECT current_setting('orcid_crosswalk');
+----
+true
+
+query I
+SELECT count(*) FROM rec_works r JOIN written ox ON ox.stem = r.stem AND ox.fmt = 'xml' JOIN written oj ON oj.stem = r.stem AND oj.fmt = 'json'
+WHERE orcid_work_to_xml(r.rec) = ox.text AND orcid_work_to_json(r.rec) = oj.text;
+----
+2
+
+# the argument wins: false is the default layout even with the setting on
+query I
+SELECT count(*) FROM rec_works r JOIN default_out n USING (stem)
+WHERE orcid_work_to_xml(r.rec, false) = n.x AND orcid_work_to_json(r.rec, false) = n.j;
+----
+2
+
+query I
+SELECT coalesce(string_agg(e.stem || '.' || e.fmt, ' ' ORDER BY e.stem, e.fmt), 'none')
+FROM expected e
+JOIN (SELECT stem, 'xml' AS fmt, orcid_person_item_to_xml(rec) AS text FROM rec_person_items
+      UNION ALL SELECT stem, 'json', orcid_person_item_to_json(rec) FROM rec_person_items
+      UNION ALL SELECT stem, 'xml', orcid_affiliation_to_xml(rec) FROM rec_affiliations
+      UNION ALL SELECT stem, 'json', orcid_affiliation_to_json(rec) FROM rec_affiliations
+      UNION ALL SELECT stem, 'xml', orcid_research_resource_to_xml(rec) FROM rec_rr
+      UNION ALL SELECT stem, 'json', orcid_research_resource_to_json(rec) FROM rec_rr
+      UNION ALL SELECT 'bulk-work-3.0', 'xml', orcid_bulk_works_to_xml(list(rec ORDER BY n)) FROM rec_bulk
+      UNION ALL SELECT 'bulk-work-3.0', 'json', orcid_bulk_works_to_json(list(rec ORDER BY n)) FROM rec_bulk) o USING (stem, fmt)
+WHERE o.text IS DISTINCT FROM e.content;
+----
+none
+
+statement ok
+RESET orcid_crosswalk;
+
+query I
+SELECT current_setting('orcid_crosswalk');
+----
+false

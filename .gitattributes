@@ -1,0 +1,7 @@
+# Check every file out byte for byte on every platform: the tests compare
+# fixtures, SHA-256 hashes and written documents exactly, so no line-ending
+# conversion (core.autocrlf on Windows) may touch them.
+* -text
+*.gz binary
+*.tgz binary
+*.tar binary

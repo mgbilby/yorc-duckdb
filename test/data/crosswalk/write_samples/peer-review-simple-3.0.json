@@ -1,0 +1,34 @@
+{
+  "convening-organization": {
+    "address": {
+      "city": "Bethesda",
+      "country": "US",
+      "region": "MD"
+    },
+    "disambiguated-organization": {
+      "disambiguated-organization-identifier": "385488",
+      "disambiguation-source": "RINGGOLD"
+    },
+    "name": "ORCID"
+  },
+  "review-completion-date": {
+    "year": {
+      "value": "2012"
+    }
+  },
+  "review-group-id": "issn:1741-4857",
+  "review-identifiers": {
+    "external-id": [
+      {
+        "external-id-relationship": "self",
+        "external-id-type": "source-work-id",
+        "external-id-url": {
+          "value": "https://localsystem.org/1234"
+        },
+        "external-id-value": "1234"
+      }
+    ]
+  },
+  "review-type": "review",
+  "reviewer-role": "reviewer"
+}

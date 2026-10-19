@@ -1,0 +1,76 @@
+{
+  "bulk": [
+    {
+      "work": {
+        "external-ids": {
+          "external-id": [
+            {
+              "external-id-relationship": "self",
+              "external-id-type": "doi",
+              "external-id-url": {
+                "value": "http://extId/1"
+              },
+              "external-id-value": "10.1016/j.crvasa.2015.05.007"
+            }
+          ]
+        },
+        "journal-title": {
+          "value": "Cor et Vasa"
+        },
+        "publication-date": {
+          "day": {
+            "value": "01"
+          },
+          "month": {
+            "value": "06"
+          },
+          "year": {
+            "value": "2015"
+          }
+        },
+        "title": {
+          "title": {
+            "value": "Current treatment of left main coronary artery disease # 1"
+          }
+        },
+        "type": "journal-article"
+      }
+    },
+    {
+      "work": {
+        "external-ids": {
+          "external-id": [
+            {
+              "external-id-relationship": "self",
+              "external-id-type": "doi",
+              "external-id-url": {
+                "value": "http://extId/2"
+              },
+              "external-id-value": "10.1016/j.crvasa.2015.05.008"
+            }
+          ]
+        },
+        "journal-title": {
+          "value": "Cor et Vasa"
+        },
+        "publication-date": {
+          "day": {
+            "value": "01"
+          },
+          "month": {
+            "value": "06"
+          },
+          "year": {
+            "value": "2015"
+          }
+        },
+        "title": {
+          "title": {
+            "value": "Current treatment of left main coronary artery disease # 2"
+          }
+        },
+        "type": "journal-article"
+      }
+    }
+  ]
+}

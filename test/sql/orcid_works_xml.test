@@ -1,0 +1,108 @@
+# name: test/sql/orcid_works_xml.test
+# description: orcid_works_xml in-out function: literals, lateral joins, XML edge cases
+# group: [orcid]
+
+require yorc
+
+# same rows whether read from a file or from an XML string column
+query III
+SELECT count(*), sum(w.put_code), min(w.source_hash)
+FROM read_text('test/data/0000-0003-0100-6634.xml') t, orcid_works_xml(t.content) w;
+----
+382	36003218443	494662244addfd21664a3a56f222a88614b83f61084888ac6162eeb970324801
+
+# entities, numeric references, CDATA, self-closing elements, orcid-identifier fallback
+query IIIIIIII
+SELECT orcid, put_code, group_index, title, journal, doi, pub_year, pub_month
+FROM orcid_works_xml('<?xml version="1.0"?>
+<!-- comment -->
+<record:record xmlns:record="r" xmlns:common="c" xmlns:activities="a" xmlns:work="w">
+  <common:orcid-identifier><common:path>0000-0002-1825-0097</common:path></common:orcid-identifier>
+  <activities:activities-summary>
+    <activities:works>
+      <activities:group>
+        <work:work-summary put-code="7" visibility="public">
+          <work:title><common:title>Fish &amp; Chips &#x2014; &#233;t&#xE9; &lt;3</common:title></work:title>
+          <common:external-ids>
+            <common:external-id>
+              <common:external-id-type>doi</common:external-id-type>
+              <common:external-id-value>10.1000/ABC</common:external-id-value>
+              <common:external-id-relationship>part-of</common:external-id-relationship>
+            </common:external-id>
+            <common:external-id>
+              <common:external-id-type>doi</common:external-id-type>
+              <common:external-id-value>10.1000/XYZ</common:external-id-value>
+              <common:external-id-relationship>self</common:external-id-relationship>
+            </common:external-id>
+          </common:external-ids>
+          <common:url/>
+          <work:type>book</work:type>
+          <common:publication-date><common:year>1999</common:year><common:month>xx</common:month></common:publication-date>
+          <work:journal-title><![CDATA[A <raw> & journal]]></work:journal-title>
+        </work:work-summary>
+      </activities:group>
+    </activities:works>
+  </activities:activities-summary>
+</record:record>');
+----
+0000-0002-1825-0097	7	1	Fish & Chips — été <3	A <raw> & journal	10.1000/xyz	1999	NULL
+
+# NULL input yields zero rows with the full schema (used for CREATE TABLE ... AS)
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_works_xml(NULL));
+----
+32
+
+# NULL input and records without works yield no rows
+query I
+SELECT count(*) FROM orcid_works_xml(NULL);
+----
+0
+
+query I
+SELECT count(*) FROM orcid_works_xml('<record:record path="/0000-0002-1825-0097"/>');
+----
+0
+
+statement error
+SELECT * FROM orcid_works_xml('<a><b></a>');
+----
+malformed XML
+
+# ---------------------------------------------------------------- UTF-8
+# XML input is checked for UTF-8 where it enters the extractor
+# (orcid::ExtractSection), as JSON input is: a Latin-1 file is a malformed-XML
+# error naming the byte (orcid: malformed XML in '<file>': invalid UTF-8 at
+# byte <n>), not invalid text in a VARCHAR column.
+# test/data/encoding/work-latin1.xml.bad: "Caf\xE9 culture", the 0xE9 at byte
+# 190 (grep -boa Caf gives 187). The .bad extension keeps it out of the
+# test/data/*/*.xml globs of the other tests.
+
+statement error
+SELECT * FROM orcid_works('test/data/encoding/work-latin1.xml.bad');
+----
+work-latin1.xml.bad': invalid UTF-8 at byte 190
+
+statement error
+SELECT * FROM orcid_external_ids('test/data/encoding/work-latin1.xml.bad');
+----
+invalid UTF-8 at byte 190
+
+# orcid_documents hands the text out as a VARCHAR, so it refuses it too
+statement error
+SELECT * FROM orcid_documents('test/data/encoding/work-latin1.xml.bad');
+----
+orcid_documents: invalid UTF-8 at byte 190 of
+
+# the same document as valid UTF-8 (a VARCHAR is always UTF-8) reads as before
+query II
+SELECT put_code, title FROM orcid_works_xml('<work:work xmlns:work="http://www.orcid.org/ns/work" xmlns:common="http://www.orcid.org/ns/common" put-code="1"><work:title><common:title>Café culture</common:title></work:title><work:type>other</work:type></work:work>');
+----
+1	Café culture
+
+# character references to no Unicode scalar value (a surrogate, beyond
+# U+10FFFF, NUL) are kept as literal text instead of becoming invalid UTF-8
+query I
+SELECT title FROM orcid_works_xml('<work:work xmlns:work="w" xmlns:common="c"><work:title><common:title>a&#xD800;b&#x110000;c&#0;</common:title></work:title></work:work>');
+----
+a&#xD800;b&#x110000;c&#0;

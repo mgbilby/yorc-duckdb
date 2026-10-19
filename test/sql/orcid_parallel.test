@@ -1,0 +1,48 @@
+# name: test/sql/orcid_parallel.test
+# description: file readers scan files and archive members on several threads; output order (document order) and max_records are the same as on one thread
+# group: [orcid]
+
+require yorc
+
+statement ok
+SET threads = 1;
+
+statement ok
+CREATE TABLE one_archive AS SELECT * FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz');
+
+statement ok
+CREATE TABLE one_glob AS SELECT * FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/*/*.xml');
+
+statement ok
+SET threads = 4;
+
+statement ok
+CREATE TABLE four_archive AS SELECT * FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz');
+
+statement ok
+CREATE TABLE four_glob AS SELECT * FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/*/*.xml');
+
+# same rows in the same order (insertion order is preserved through rowid)
+query II
+SELECT (SELECT count(*) FROM one_archive), (SELECT count(*) FROM one_archive a JOIN four_archive b USING (rowid)
+        WHERE a.put_code IS DISTINCT FROM b.put_code OR a.source_hash IS DISTINCT FROM b.source_hash);
+----
+386	0
+
+query II
+SELECT (SELECT count(*) = (SELECT count(*) FROM four_glob) FROM one_glob),
+       (SELECT count(*) FROM one_glob a JOIN four_glob b USING (rowid)
+        WHERE a.value IS DISTINCT FROM b.value OR a.source_hash IS DISTINCT FROM b.source_hash);
+----
+true	0
+
+# max_records stays exact per file
+query I
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', max_records := 2);
+----
+383
+
+query I
+SELECT count(*) FROM orcid_person('test/data/dump/orcid_test_summaries.tar.gz', max_records := 1);
+----
+1

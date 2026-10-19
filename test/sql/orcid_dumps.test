@@ -1,0 +1,86 @@
+# name: test/sql/orcid_dumps.test
+# description: reading ORCID Public Data File-style tar / tar.gz archives directly
+# group: [orcid]
+
+require yorc
+
+# gzip-compressed GNU tar: 2 records + works-3.0 under a >100-char member path;
+# README.txt is skipped by the default members filter ('*.xml')
+query II
+SELECT count(*), count(DISTINCT orcid) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz');
+----
+386	2
+
+# the same bytes named .tgz (as yorc-zig's testdata names it): DuckDB's AUTO_DETECT
+# does not know .tgz, so the extension opens it as gzip itself
+query II
+SELECT count(*), count(DISTINCT orcid) FROM orcid_works('test/data/dump/orcid_test_summaries.tgz');
+----
+386	2
+
+query I
+SELECT count(*) FROM orcid_documents('test/data/dump/orcid_test_summaries.tgz');
+----
+3
+
+# the same tar as two concatenated gzip members (split inside the first record,
+# at byte 700000 of the tar; each part gzip -9n). DuckDB's gzip file system
+# starts a new inflate at each member's end (MiniZStreamWrapper::Read, `refresh`),
+# as Rust's MultiGzDecoder and Zig's gzip_members do
+query II
+SELECT count(*), count(DISTINCT orcid) FROM orcid_works('test/data/dump/orcid_test_summaries_2members.tar.gz');
+----
+386	2
+
+query I
+SELECT count(*) FROM (SELECT name, sha256(xml) FROM orcid_documents('test/data/dump/orcid_test_summaries_2members.tar.gz')
+                      EXCEPT SELECT name, sha256(xml) FROM orcid_documents('test/data/dump/orcid_test_summaries.tar.gz'));
+----
+0
+
+query I
+SELECT count(*) FROM orcid_documents('test/data/dump/orcid_test_summaries_2members.tar.gz');
+----
+3
+
+# the same archive as an uncompressed pax tar
+query I
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries_pax.tar');
+----
+386
+
+# select members by path (ORCID dumps group records by the iD's last three characters)
+query II
+SELECT count(*), min(orcid) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', members := '*/634/*');
+----
+382	0000-0003-0100-6634
+
+# stop after N matching members: only that much of the archive is read
+query I
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', max_records := 1);
+----
+382
+
+query I
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', max_records := 2);
+----
+383
+
+query I
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', max_records := 0);
+----
+0
+
+# every section reads archives
+query III
+SELECT (SELECT count(*) FROM orcid_person('test/data/dump/orcid_test_summaries.tar.gz')),
+       (SELECT count(*) FROM orcid_affiliations('test/data/dump/orcid_test_summaries.tar.gz')),
+       (SELECT count(*) FROM orcid_history('test/data/dump/orcid_test_summaries.tar.gz'));
+----
+2	86	2
+
+# max_records also applies to plain XML files (a file counts as one record)
+query I
+SELECT count(*) FROM orcid_works('test/data/0000-0003-0100-6634.xml', max_records := 0);
+----
+0

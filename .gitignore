@@ -1,0 +1,9 @@
+/build
+*.duckdb_extension
+/.cache/
+
+# test fixtures (a parent .gitignore may ignore *.gz)
+!test/data/releases/*.tar.gz
+
+# Files the walkthrough writes (docs/walkthrough.sql)
+/walkthrough_works.csv

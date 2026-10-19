@@ -1,0 +1,66 @@
+# name: test/sql/orcid_max_member_bytes.test
+# description: archive members larger than max_member_bytes (default 64 MiB) are refused before their content is read, with an error naming the member
+# group: [orcid]
+
+require yorc
+
+# member sizes from `tar -tvzf test/data/dump/orcid_test_summaries.tar.gz`:
+# 634/0000-0003-0100-6634.xml 1324198, 880/8888-8888-8888-8880.xml 36958,
+# a-directory-name-.../and-a-file-name-too-0000-0000-0000-0000.xml 6672
+
+# the default (64 MiB) reads the whole fixture
+query I
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz');
+----
+386
+
+# a limit equal to the largest member is enough (the limit is inclusive)
+query I
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', max_member_bytes := 1324198);
+----
+386
+
+# one byte less: the scan fails, naming the archive and the member
+statement error
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', max_member_bytes := 1324197);
+----
+member 'ORCID_test_summaries/634/0000-0003-0100-6634.xml' in 'test/data/dump/orcid_test_summaries.tar.gz' is 1324198 bytes, over max_member_bytes (1324197)
+
+# the same in an uncompressed pax tar
+statement error
+SELECT count(*) FROM orcid_person('test/data/dump/orcid_test_summaries_pax.tar', max_member_bytes := 1000);
+----
+over max_member_bytes (1000)
+
+# only members that match the filter are checked: README.txt and the large record are not read
+query I
+SELECT count(*) FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', members := '*/880/*', max_member_bytes := 36958);
+----
+1
+
+# orcid_documents has the same parameter
+query I
+SELECT count(*) FROM orcid_documents('test/data/dump/orcid_test_summaries.tar.gz', max_member_bytes := 1324198);
+----
+3
+
+statement error
+SELECT count(*) FROM orcid_documents('test/data/dump/orcid_test_summaries.tar.gz', max_member_bytes := 40000);
+----
+member 'ORCID_test_summaries/634/0000-0003-0100-6634.xml' in 'test/data/dump/orcid_test_summaries.tar.gz' is 1324198 bytes, over max_member_bytes (40000)
+
+# plain files are not archive members: the limit does not apply to them
+query I
+SELECT count(*) FROM orcid_works('test/data/0000-0003-0100-6634.xml', max_member_bytes := 1);
+----
+382
+
+statement error
+SELECT * FROM orcid_works('test/data/dump/orcid_test_summaries.tar.gz', max_member_bytes := 0);
+----
+max_member_bytes must be >= 1
+
+statement error
+SELECT * FROM orcid_documents('test/data/dump/orcid_test_summaries.tar.gz', max_member_bytes := -5);
+----
+max_member_bytes must be >= 1

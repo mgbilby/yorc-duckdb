@@ -1,0 +1,8 @@
+{
+  "external-id-relationship": "self",
+  "external-id-type": "My ID System",
+  "external-id-url": {
+    "value": "https://myid.com/A-0003"
+  },
+  "external-id-value": "A-0003"
+}

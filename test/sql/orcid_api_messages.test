@@ -1,0 +1,203 @@
+# name: test/sql/orcid_api_messages.test
+# description: API messages outside the record: summary, search, error, notification and group-id documents (reference/orcid-model samples)
+# group: [orcid]
+
+require yorc
+
+# ---------------------------------------------------------------- record summary (summary-3.0)
+
+query IIIIII
+SELECT orcid, orcid_uri, orcid_host, credit_name, created, last_modified
+FROM orcid_summary('reference/orcid-model/summary_3.0/samples/summary-3.0.xml');
+----
+8888-8888-8888-8880	https://orcid.org/8888-8888-8888-8880	orcid.org	User credited name	2024-01-01T12:00:00	2024-01-01T12:00:00
+
+query IIIIII
+SELECT external_identifier_count, external_identifier_types, employment_count, professional_activity_count,
+       education_qualification_count, email_domains
+FROM orcid_summary('reference/orcid-model/summary_3.0/samples/summary-3.0.xml');
+----
+3	Scopus; ResearcherID; Other	5	5	NULL	orcid.org; domain.org
+
+query IIIIIIIIIII
+SELECT funding_self_asserted_count, funding_validated_count, work_self_asserted_count, work_validated_count,
+       peer_review_publication_grants, peer_review_self_asserted_count, peer_review_total,
+       research_resource_self_asserted_count, research_resource_validated_count, email_domain_count,
+       source_hash IS NOT NULL
+FROM orcid_summary('reference/orcid-model/summary_3.0/samples/summary-3.0.xml');
+----
+0	1	0	1	6	0	6	NULL	NULL	2	true
+
+query II
+SELECT kind, count(*) FROM orcid_summary_items('reference/orcid-model/summary_3.0/samples/summary-3.0.xml')
+GROUP BY kind ORDER BY kind;
+----
+email-domain	2
+employment	3
+external-identifier	3
+professional-activity	1
+
+query III
+SELECT count(*) FILTER (WHERE validated), count(*) FILTER (WHERE NOT validated), count(*) FILTER (WHERE validated IS NULL)
+FROM orcid_summary_items('reference/orcid-model/summary_3.0/samples/summary-3.0.xml');
+----
+4	3	2
+
+query IIIIIIIIIIII
+SELECT ordinal, put_code, type, organization_name, role, url, start_year, start_month, start_day, end_year, end_month, end_day
+FROM orcid_summary_items('reference/orcid-model/summary_3.0/samples/summary-3.0.xml')
+WHERE kind IN ('employment', 'professional-activity') ORDER BY kind, ordinal;
+----
+1	1	employment	Fake role title 1	Org # 1	https://test.orcid.org/1	2020	1	1	2024	12	31
+2	2	employment	Fake role title 2	Org # 2	https://test.orcid.org/2	2020	1	1	2024	12	31
+3	3	employment	Fake role title 3	Org # 3	https://test.orcid.org/3	2020	1	1	2024	12	31
+1	1	distinction	Fake role title	Org # 1	https://test.orcid.org/	2020	1	1	2024	12	31
+
+query IIII
+SELECT put_code, type, value, url
+FROM orcid_summary_items('reference/orcid-model/summary_3.0/samples/summary-3.0.xml')
+WHERE kind = 'external-identifier' ORDER BY ordinal;
+----
+1	Scopus	1	https://test.orcid.org/1
+2	ResearcherID	2	https://test.orcid.org/2
+3	Other	3	https://test.orcid.org/3
+
+query II
+SELECT value, verification_date
+FROM orcid_summary_items('reference/orcid-model/summary_3.0/samples/summary-3.0.xml')
+WHERE kind = 'email-domain' ORDER BY ordinal;
+----
+orcid.org	2024-11-04T17:31:37.355+02:00
+domain.org	NULL
+
+# ---------------------------------------------------------------- search (search-3.0, expanded-search-3.0)
+
+query IIIIIII
+SELECT num_found, ordinal, orcid, orcid_uri, orcid_host, given_names, item
+FROM orcid_search_results('reference/orcid-model/record_3.0/samples/read_samples/search-3.0.xml');
+----
+1	1	8888-8888-8888-8880	https://orcid.org/8888-8888-8888-8880	orcid.org	NULL	result
+
+# no expanded-search sample is vendored; this literal follows expanded-search-3.0.xsd
+query IIIIIIIIIII
+SELECT num_found, ordinal, orcid, orcid_uri, given_names, family_names, credit_name, other_names, emails,
+       institution_names, item
+FROM orcid_search_results_xml('<es:expanded-search num-found="7" xmlns:es="http://www.orcid.org/ns/expanded-search"><es:expanded-result><es:orcid-id>0000-0002-1825-0097</es:orcid-id><es:given-names>Given</es:given-names><es:family-names>Family</es:family-names><es:credit-name>G. Family</es:credit-name><es:other-name>Other A</es:other-name><es:other-name>Other B</es:other-name><es:email>a@example.org</es:email><es:institution-name>Inst A</es:institution-name><es:institution-name>Inst B</es:institution-name></es:expanded-result><es:expanded-result><es:orcid-id>0000-0003-0100-6634</es:orcid-id></es:expanded-result></es:expanded-search>');
+----
+7	1	0000-0002-1825-0097	NULL	Given	Family	G. Family	Other A; Other B	a@example.org	Inst A; Inst B	expanded-result
+7	2	0000-0003-0100-6634	NULL	NULL	NULL	NULL	NULL	NULL	NULL	expanded-result
+
+# ---------------------------------------------------------------- errors (error-3.0, bulk responses)
+
+query IIIIIIII
+SELECT orcid, response_code, developer_message, user_message, error_code, more_info, container, position
+FROM orcid_errors('reference/orcid-model/record_3.0/samples/read_samples/error-3.0.xml');
+----
+NULL	0	error:developer-message	error:user-message	0	http://tempuri.org	NULL	1
+
+query IIIIIII
+SELECT response_code, developer_message LIKE 'Invalid work type, valid values are:%', user_message, error_code,
+       more_info, container, position
+FROM orcid_errors('reference/orcid-model/record_3.0/samples/read_samples/bulk-work-err.xml');
+----
+400	true	Please specify a work type.	9037	http://members.orcid.org/api/api-error-codes	bulk	2
+
+# the work of the same bulk response is still read by orcid_works
+query II
+SELECT (SELECT count(*) FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/bulk-work-err.xml')),
+       (SELECT count(*) FROM orcid_errors('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml'));
+----
+1	0
+
+# ---------------------------------------------------------------- notifications (notification-permission-3.0, notification-custom-3.0)
+
+query IIIIIIII
+SELECT put_code, notification_type, subject, intro, body_text, language, authorization_host, item_count
+FROM orcid_notifications('reference/orcid-model/notification_3.0/samples/notification-permission-3.0.xml');
+----
+1	permission	Subject	Intro	NULL	NULL	orcid.org	4
+
+query II
+SELECT authorization_url, authorization_path
+FROM orcid_notifications('reference/orcid-model/notification_3.0/samples/notification-permission-3.0.xml');
+----
+https://orcid.org/oauth/authorize?client_id=APP-U4UKCNSSIM1OCVQY&response_type=code&scope=/orcid-works/create&redirect_uri=http://somethirdparty.com	/oauth/authorize?client_id=APP-U4UKCNSSIM1OCVQY&response_type=code&scope=/orcid-works/create&redirect_uri=http://somethirdparty.com
+
+query IIII
+SELECT item_types, item_names, item_external_id_types, item_external_id_values
+FROM orcid_notifications('reference/orcid-model/notification_3.0/samples/notification-permission-3.0.xml');
+----
+work; employment; distinction; service	A Really Interesting Research Article; Head of Research at NanoBiologica; Honorary member; Volunteer society officer	doi	http://10.5555/12345ABCDE
+
+# CROSSCHECK #10: the rest of the item's
+# common:external-id, joined as the types and values are. The sample's one
+# external id has relationship self and no url or normalized form
+# (notification-permission-3.0.xml, grep external-id); no assertion origin.
+query IIIIII
+SELECT item_external_id_urls, item_external_id_relationships, item_external_id_normalized,
+       assertion_origin_name, assertion_origin_orcid, assertion_origin_client_id
+FROM orcid_notifications('reference/orcid-model/notification_3.0/samples/notification-permission-3.0.xml');
+----
+NULL	self	NULL	NULL	NULL	NULL
+
+query IIIIIIIII
+SELECT created, sent_date, read_date, actioned_date, archived_date, source_name, source_client_id, source_orcid,
+       source_hash IS NOT NULL
+FROM orcid_notifications('reference/orcid-model/notification_3.0/samples/notification-permission-3.0.xml');
+----
+2014-01-01T09:17:56	2014-01-01T14:45:32	NULL	NULL	NULL	Member 1	APP-U4UKCNSSIM1OCVQY	NULL	true
+
+query IIIIIIIIII
+SELECT put_code, notification_type, subject, intro, body_text, language, item_count, item_types, source_name,
+       source_orcid
+FROM orcid_notifications('reference/orcid-model/notification_3.0/samples/notification-custom-3.0.xml');
+----
+1	custom	Important Notification from ORCID	NULL	This is an email with important info.	en-gb	0	NULL	Member 1	2111-1111-1111-1114
+
+query III
+SELECT body_html LIKE '<p>%', contains(body_html, 'This is an email with <em>important</em> info.'), body_html LIKE '%</p>'
+FROM orcid_notifications('reference/orcid-model/notification_3.0/samples/notification-custom-3.0.xml');
+----
+true	true	true
+
+# ---------------------------------------------------------------- group ids (group-id-3.0)
+
+query IIIIIII
+SELECT put_code, name, group_id, description, type, source_name, total
+FROM orcid_group_ids('reference/orcid-model/group-id-3.0/samples/group-id-3.0.xml');
+----
+NULL	group-id:name	issn:xxxxxxxx	group-id:description	publisher	NULL	NULL
+
+# a group-id-records page (group-id-3.0.xsd): total/page/page-size repeat on every row
+query IIIIIIIII
+SELECT put_code, name, group_id, type, source_client_id, source_name, total, page, page_size
+FROM orcid_group_ids_xml('<g:group-id-records xmlns:g="http://www.orcid.org/ns/group-id" xmlns:common="http://www.orcid.org/ns/common"><g:total>2</g:total><g:page>0</g:page><g:page-size>100</g:page-size><g:group-id-record put-code="11"><common:source-client-id><common:path>APP-1</common:path></common:source-client-id><common:source-name>Client</common:source-name><g:name>A</g:name><g:group-id>issn:0000-0001</g:group-id><g:description>First</g:description><g:type>journal</g:type></g:group-id-record><g:group-id-record put-code="12"><g:name>B</g:name><g:group-id>issn:0000-0002</g:group-id><g:description>Second</g:description><g:type>conference</g:type></g:group-id-record></g:group-id-records>')
+ORDER BY put_code;
+----
+11	A	issn:0000-0001	journal	APP-1	Client	2	0	100
+12	B	issn:0000-0002	conference	NULL	NULL	2	0	100
+
+# ---------------------------------------------------------------- schemas and _xml twins
+
+query IIIIII
+SELECT (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_summary_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_summary_items_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_search_results_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_errors_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_notifications_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_group_ids_xml(NULL)));
+----
+23	20	13	10	30	12
+
+query III
+SELECT count(*), min(e.response_code), max(e.error_code)
+FROM read_text(['reference/orcid-model/record_3.0/samples/read_samples/error-3.0.xml',
+                'reference/orcid-model/record_3.0/samples/read_samples/bulk-work-err.xml']) t,
+     orcid_errors_xml(t.content) e;
+----
+2	0	9037
+
+query I
+SELECT count(*) FROM read_text('reference/orcid-model/summary_3.0/samples/summary-3.0.xml') t, orcid_summary_items_xml(t.content) s;
+----
+9

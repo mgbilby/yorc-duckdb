@@ -1,0 +1,1048 @@
+# name: test/sql/orcid_write.test
+# description: the writers (orcid_<writer>_to_xml / _to_json, orcid_bulk_works_to_*): every write sample of reference/orcid-model reads, writes and reads back to the same rows, in XML, in JSON and across the two; required fields, the bulk limit, escaping
+# group: [orcid]
+#
+# Method: each write sample is read with the section readers; its rows are
+# assembled into the writer's input (the item row as a STRUCT, plus LIST(STRUCT)
+# fields of its external ids, contributors, resource items); that is written
+# and read back, and the rows must be equal (EXCEPT ALL both ways), source_hash
+# aside: it is the SHA-256 of each document read, so it differs by design and
+# is what ties the rows of one document together below (source_hash =
+# sha256(document)). Expected values that are not rows of the samples come
+# from the writer rules in src/core/writer.cpp and from the XSDs.
+
+require yorc
+
+statement ok
+CREATE TABLE docs AS
+SELECT name, format, xml AS doc FROM orcid_documents('reference/orcid-model/record_3.0/samples/write_samples/*');
+
+# 48 files (ls | wc -l): 21 XML, 27 JSON
+query III
+SELECT count(*), count(*) FILTER (WHERE format = 'xml'), count(*) FILTER (WHERE format = 'json') FROM docs;
+----
+48	21	27
+
+# ---------------------------------------------------------------- works: work-full (xml, json), work-simple (xml), the two 51-contributor JSON
+
+statement ok
+CREATE TABLE src_works AS
+SELECT w.* FROM (SELECT doc FROM docs WHERE name LIKE 'work-%' AND format = 'xml') d, orcid_works_xml(d.doc) w
+UNION ALL
+SELECT w.* FROM (SELECT doc FROM docs WHERE name LIKE 'work-%' AND format = 'json') d, orcid_works_json(d.doc) w;
+
+statement ok
+CREATE TABLE src_work_ids AS
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'work-%' AND format = 'xml') d, orcid_external_ids_xml(d.doc) e
+UNION ALL
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'work-%' AND format = 'json') d, orcid_external_ids_json(d.doc) e;
+
+statement ok
+CREATE TABLE src_work_contributors AS
+SELECT c.* FROM (SELECT doc FROM docs WHERE name LIKE 'work-%' AND format = 'xml') d, orcid_contributors_xml(d.doc) c
+UNION ALL
+SELECT c.* FROM (SELECT doc FROM docs WHERE name LIKE 'work-%' AND format = 'json') d, orcid_contributors_json(d.doc) c;
+
+# 5 works; contributors 1 + 2 + 0 + 51 + 51 (work-simple-3.0.xml has none)
+query III
+SELECT (SELECT count(*) FROM src_works), (SELECT count(*) FROM src_work_contributors), (SELECT count(*) FROM src_work_ids) > 0;
+----
+5	105	true
+
+statement ok
+CREATE TABLE rec_works AS
+SELECT w.source_hash AS doc_hash,
+       struct_insert(w,
+           external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_work_ids e WHERE e.source_hash = w.source_hash),
+           contributors := (SELECT list(c ORDER BY c.ordinal) FROM src_work_contributors c WHERE c.source_hash = w.source_hash)) AS rec
+FROM src_works w;
+
+statement ok
+CREATE TABLE out_works AS SELECT doc_hash, orcid_work_to_xml(rec) AS xml, orcid_work_to_json(rec) AS json FROM rec_works;
+
+# read -> write XML -> read
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_works
+   EXCEPT ALL SELECT w.* EXCLUDE (source_hash) FROM out_works o, orcid_works_xml(o.xml) w)
+  UNION ALL
+  (SELECT w.* EXCLUDE (source_hash) FROM out_works o, orcid_works_xml(o.xml) w
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_works));
+----
+0
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_work_ids
+   EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_works o, orcid_external_ids_xml(o.xml) e)
+  UNION ALL
+  (SELECT e.* EXCLUDE (source_hash) FROM out_works o, orcid_external_ids_xml(o.xml) e
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_work_ids));
+----
+0
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_work_contributors
+   EXCEPT ALL SELECT c.* EXCLUDE (source_hash) FROM out_works o, orcid_contributors_xml(o.xml) c)
+  UNION ALL
+  (SELECT c.* EXCLUDE (source_hash) FROM out_works o, orcid_contributors_xml(o.xml) c
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_work_contributors));
+----
+0
+
+# read -> write JSON -> read
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_works
+   EXCEPT ALL SELECT w.* EXCLUDE (source_hash) FROM out_works o, orcid_works_json(o.json) w)
+  UNION ALL
+  (SELECT w.* EXCLUDE (source_hash) FROM out_works o, orcid_works_json(o.json) w
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_works));
+----
+0
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_work_ids
+   EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_works o, orcid_external_ids_json(o.json) e)
+  UNION ALL
+  (SELECT e.* EXCLUDE (source_hash) FROM out_works o, orcid_external_ids_json(o.json) e
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_work_ids));
+----
+0
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_work_contributors
+   EXCEPT ALL SELECT c.* EXCLUDE (source_hash) FROM out_works o, orcid_contributors_json(o.json) c)
+  UNION ALL
+  (SELECT c.* EXCLUDE (source_hash) FROM out_works o, orcid_contributors_json(o.json) c
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_work_contributors));
+----
+0
+
+# XML -> JSON -> XML: rows read from the JSON output, assembled again, written as XML
+statement ok
+CREATE TABLE j_works AS SELECT w.* FROM out_works o, orcid_works_json(o.json) w;
+
+statement ok
+CREATE TABLE j_work_ids AS SELECT e.* FROM out_works o, orcid_external_ids_json(o.json) e;
+
+statement ok
+CREATE TABLE j_work_contributors AS SELECT c.* FROM out_works o, orcid_contributors_json(o.json) c;
+
+statement ok
+CREATE TABLE rec_j_works AS
+SELECT struct_insert(w,
+           external_ids := (SELECT list(e ORDER BY e.rowid) FROM j_work_ids e WHERE e.source_hash = w.source_hash),
+           contributors := (SELECT list(c ORDER BY c.ordinal) FROM j_work_contributors c WHERE c.source_hash = w.source_hash)) AS rec
+FROM j_works w;
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_works
+   EXCEPT ALL SELECT w.* EXCLUDE (source_hash) FROM rec_j_works r, orcid_works_xml(orcid_work_to_xml(r.rec)) w)
+  UNION ALL
+  (SELECT w.* EXCLUDE (source_hash) FROM rec_j_works r, orcid_works_xml(orcid_work_to_xml(r.rec)) w
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_works));
+----
+0
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_work_contributors
+   EXCEPT ALL SELECT c.* EXCLUDE (source_hash) FROM rec_j_works r, orcid_contributors_xml(orcid_work_to_xml(r.rec)) c)
+  UNION ALL
+  (SELECT c.* EXCLUDE (source_hash) FROM rec_j_works r, orcid_contributors_xml(orcid_work_to_xml(r.rec)) c
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_work_contributors));
+----
+0
+
+# the written XML follows work-3.0.xsd: namespaces, sequence order, no read-only fields
+query IIIII
+SELECT starts_with(xml, '<?xml version="1.0" encoding="UTF-8"?>' || chr(10) || '<work:work xmlns:common="http://www.orcid.org/ns/common" xmlns:work="http://www.orcid.org/ns/work">'),
+       position('<work:title>' IN xml) < position('<work:journal-title>' IN xml)
+         AND position('<work:journal-title>' IN xml) < position('<work:short-description>' IN xml)
+         AND position('<work:citation>' IN xml) < position('<work:type>' IN xml)
+         AND position('<work:type>' IN xml) < position('<common:publication-date>' IN xml)
+         AND position('<common:publication-date>' IN xml) < position('<common:external-ids>' IN xml)
+         AND position('<common:external-ids>' IN xml) < position('<common:url>' IN xml)
+         AND position('<common:url>' IN xml) < position('<work:contributors>' IN xml)
+         AND position('<work:contributors>' IN xml) < position('<common:language-code>' IN xml)
+         AND position('<common:language-code>' IN xml) < position('<common:country>' IN xml),
+       contains(xml, '<common:translated-title language-code="en">Translated-title English</common:translated-title>'),
+       contains(xml, '<common:month>05</common:month>'),
+       contains(xml, 'source') OR contains(xml, 'created-date') OR contains(xml, 'put-code')
+FROM out_works WHERE doc_hash = (SELECT sha256(doc) FROM docs WHERE name = 'work-full-3.0.json');
+----
+true	true	true	true	false
+
+# ... and the JSON ORCID's own serialization: value wrappers, arrays of external ids and contributors
+query IIII
+SELECT contains(json, '"journal-title": {' || chr(10) || '    "value": "Journal title"' || chr(10) || '  }'),
+       contains(json, '"external-ids": {' || chr(10) || '    "external-id": ['),
+       contains(json, '"contributor": ['),
+       contains(json, '"short-description": "This is a short description of the work."')
+FROM out_works WHERE doc_hash = (SELECT sha256(doc) FROM docs WHERE name = 'work-full-3.0.json');
+----
+true	true	true	true
+
+# ---------------------------------------------------------------- fundings: funding-3.0.xml, funding-3.0-simple.json, funding-3.0-with-NISO-roles.json
+
+statement ok
+CREATE TABLE src_fundings AS
+SELECT f.* FROM (SELECT doc FROM docs WHERE name LIKE 'funding-%' AND format = 'xml') d, orcid_fundings_xml(d.doc) f
+UNION ALL
+SELECT f.* FROM (SELECT doc FROM docs WHERE name LIKE 'funding-%' AND format = 'json') d, orcid_fundings_json(d.doc) f;
+
+statement ok
+CREATE TABLE src_funding_ids AS
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'funding-%' AND format = 'xml') d, orcid_external_ids_xml(d.doc) e
+UNION ALL
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'funding-%' AND format = 'json') d, orcid_external_ids_json(d.doc) e;
+
+statement ok
+CREATE TABLE src_funding_contributors AS
+SELECT c.* FROM (SELECT doc FROM docs WHERE name LIKE 'funding-%' AND format = 'json') d, orcid_contributors_json(d.doc) c;
+
+# 3 fundings; the NISO sample has 18 contributors, the others none
+query II
+SELECT (SELECT count(*) FROM src_fundings), (SELECT count(*) FROM src_funding_contributors);
+----
+3	18
+
+statement ok
+CREATE TABLE rec_fundings AS
+SELECT f.source_hash AS doc_hash,
+       struct_insert(f,
+           external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_funding_ids e WHERE e.source_hash = f.source_hash),
+           contributors := (SELECT list(c ORDER BY c.ordinal) FROM src_funding_contributors c WHERE c.source_hash = f.source_hash)) AS rec
+FROM src_fundings f;
+
+statement ok
+CREATE TABLE out_fundings AS SELECT doc_hash, orcid_funding_to_xml(rec) AS xml, orcid_funding_to_json(rec) AS json FROM rec_fundings;
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_fundings
+   EXCEPT ALL SELECT f.* EXCLUDE (source_hash) FROM out_fundings o, orcid_fundings_xml(o.xml) f)
+  UNION ALL
+  (SELECT f.* EXCLUDE (source_hash) FROM out_fundings o, orcid_fundings_xml(o.xml) f
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_fundings)
+  UNION ALL
+  (SELECT * EXCLUDE (source_hash) FROM src_fundings
+   EXCEPT ALL SELECT f.* EXCLUDE (source_hash) FROM out_fundings o, orcid_fundings_json(o.json) f)
+  UNION ALL
+  (SELECT f.* EXCLUDE (source_hash) FROM out_fundings o, orcid_fundings_json(o.json) f
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_fundings));
+----
+0
+
+query I
+SELECT sum(n)::BIGINT FROM (
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_funding_ids
+   EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_fundings o, orcid_external_ids_xml(o.xml) e))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT e.* EXCLUDE (source_hash) FROM out_fundings o, orcid_external_ids_xml(o.xml) e
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_funding_ids))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_funding_contributors
+   EXCEPT ALL SELECT c.* EXCLUDE (source_hash) FROM out_fundings o, orcid_contributors_json(o.json) c))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT c.* EXCLUDE (source_hash) FROM out_fundings o, orcid_contributors_json(o.json) c
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_funding_contributors)));
+----
+0
+
+# funding-3.0.xml: <funding:amount currency-code="ADP">1000</funding:amount>; the organization comes last (funding-3.0.xsd)
+query III
+SELECT contains(xml, '<funding:amount currency-code="ADP">1000</funding:amount>'),
+       position('<common:organization>' IN xml) > position('<common:external-ids>' IN xml),
+       contains(json, '"amount": {' || chr(10) || '    "value": "1000",' || chr(10) || '    "currency-code": "ADP"' || chr(10) || '  }')
+FROM out_fundings WHERE doc_hash = (SELECT sha256(doc) FROM docs WHERE name = 'funding-3.0.xml');
+----
+true	true	true
+
+# XML -> JSON -> XML
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_fundings
+   EXCEPT ALL
+   SELECT x.* EXCLUDE (source_hash)
+   FROM out_fundings o, orcid_fundings_json(o.json) j,
+        orcid_fundings_xml(orcid_funding_to_xml(struct_insert(j,
+            external_ids := (SELECT list(e) FROM orcid_external_ids_json(o.json) e),
+            contributors := (SELECT list(c ORDER BY c.ordinal) FROM orcid_contributors_json(o.json) c)))) x));
+----
+0
+
+# ---------------------------------------------------------------- the seven affiliation types (XML and JSON samples)
+
+statement ok
+CREATE TABLE src_affiliations AS SELECT * FROM orcid_affiliations_xml(NULL);
+
+statement ok
+CREATE TABLE src_affiliation_ids AS SELECT * FROM orcid_external_ids_xml(NULL);
+
+foreach type distinction education employment invited-position membership qualification service
+
+statement ok
+INSERT INTO src_affiliations
+SELECT a.* FROM (SELECT doc FROM docs WHERE name = '${type}-3.0.xml') d, orcid_affiliations_xml(d.doc) a
+UNION ALL
+SELECT a.* FROM (SELECT doc FROM docs WHERE name = '${type}-3.0.json') d, orcid_affiliations_json(d.doc, json_root := '${type}') a;
+
+statement ok
+INSERT INTO src_affiliation_ids
+SELECT e.* FROM (SELECT doc FROM docs WHERE name = '${type}-3.0.xml') d, orcid_external_ids_xml(d.doc) e
+UNION ALL
+SELECT e.* FROM (SELECT doc FROM docs WHERE name = '${type}-3.0.json') d, orcid_external_ids_json(d.doc, json_root := '${type}') e;
+
+endloop
+
+query II
+SELECT count(*), count(DISTINCT affiliation_type) FROM src_affiliations;
+----
+14	7
+
+statement ok
+CREATE TABLE rec_affiliations AS
+SELECT a.affiliation_type, a.source_hash AS doc_hash,
+       struct_insert(a, external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_affiliation_ids e WHERE e.source_hash = a.source_hash)) AS rec
+FROM src_affiliations a;
+
+statement ok
+CREATE TABLE out_affiliations AS
+SELECT affiliation_type, doc_hash, orcid_affiliation_to_xml(rec) AS xml, orcid_affiliation_to_json(rec) AS json FROM rec_affiliations;
+
+query I
+SELECT sum(n)::BIGINT FROM (
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_affiliations
+   EXCEPT ALL SELECT a.* EXCLUDE (source_hash) FROM out_affiliations o, orcid_affiliations_xml(o.xml) a))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT a.* EXCLUDE (source_hash) FROM out_affiliations o, orcid_affiliations_xml(o.xml) a
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_affiliations))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_affiliation_ids
+   EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_affiliations o, orcid_external_ids_xml(o.xml) e))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT e.* EXCLUDE (source_hash) FROM out_affiliations o, orcid_external_ids_xml(o.xml) e
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_affiliation_ids)));
+----
+0
+
+# JSON readback: the affiliation type is not in the JSON, json_root gives it back
+statement ok
+CREATE TABLE j_affiliations AS SELECT * FROM orcid_affiliations_xml(NULL);
+
+statement ok
+CREATE TABLE j_affiliation_ids AS SELECT * FROM orcid_external_ids_xml(NULL);
+
+foreach type distinction education employment invited-position membership qualification service
+
+statement ok
+INSERT INTO j_affiliations
+SELECT a.* FROM (SELECT json FROM out_affiliations WHERE affiliation_type = '${type}') o, orcid_affiliations_json(o.json, json_root := '${type}') a;
+
+statement ok
+INSERT INTO j_affiliation_ids
+SELECT e.* FROM (SELECT json FROM out_affiliations WHERE affiliation_type = '${type}') o, orcid_external_ids_json(o.json, json_root := '${type}') e;
+
+endloop
+
+query I
+SELECT sum(n)::BIGINT FROM (
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_affiliations EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM j_affiliations))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM j_affiliations EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_affiliations))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_affiliation_ids EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM j_affiliation_ids))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM j_affiliation_ids EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_affiliation_ids)));
+----
+0
+
+# XML -> JSON -> XML
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_affiliations
+   EXCEPT ALL
+   SELECT x.* EXCLUDE (source_hash)
+   FROM j_affiliations j,
+        orcid_affiliations_xml(orcid_affiliation_to_xml(struct_insert(j,
+            external_ids := (SELECT list(e ORDER BY e.rowid) FROM j_affiliation_ids e WHERE e.source_hash = j.source_hash)))) x));
+----
+0
+
+# the document element is the type (employment-3.0.xsd and its six siblings); organization-address is required
+query II
+SELECT bool_and(contains(xml, '<' || affiliation_type || ':' || affiliation_type || ' xmlns:common="http://www.orcid.org/ns/common" xmlns:' || affiliation_type || '="http://www.orcid.org/ns/' || affiliation_type || '"')),
+       bool_and(contains(xml, '<common:address>'))
+FROM out_affiliations;
+----
+true	true
+
+# ---------------------------------------------------------------- peer reviews: full, award subject, simple (XML and JSON), research-resource subject (JSON)
+
+statement ok
+CREATE TABLE src_peer_reviews AS
+SELECT p.* FROM (SELECT doc FROM docs WHERE name LIKE 'peer-review-%' AND name NOT LIKE '%group-id%' AND format = 'xml') d, orcid_peer_reviews_xml(d.doc) p
+UNION ALL
+SELECT p.* FROM (SELECT doc FROM docs WHERE name LIKE 'peer-review-%' AND name NOT LIKE '%group-id%' AND format = 'json') d, orcid_peer_reviews_json(d.doc) p;
+
+statement ok
+CREATE TABLE src_peer_review_ids AS
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'peer-review-%' AND name NOT LIKE '%group-id%' AND format = 'xml') d, orcid_external_ids_xml(d.doc) e
+UNION ALL
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'peer-review-%' AND name NOT LIKE '%group-id%' AND format = 'json') d, orcid_external_ids_json(d.doc) e;
+
+# subject-external-identifier: the full and award samples (XML and JSON) and the research-resource JSON; not the simple ones
+query II
+SELECT (SELECT count(*) FROM src_peer_reviews), (SELECT count(*) FROM src_peer_review_ids WHERE container = 'peer-review');
+----
+7	5
+
+# the subject identifier travels as the external_ids item of container 'peer-review'
+statement ok
+CREATE TABLE out_peer_reviews AS
+SELECT p.source_hash AS doc_hash,
+       orcid_peer_review_to_xml(struct_insert(p, external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_peer_review_ids e WHERE e.source_hash = p.source_hash))) AS xml,
+       orcid_peer_review_to_json(struct_insert(p, external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_peer_review_ids e WHERE e.source_hash = p.source_hash))) AS json
+FROM src_peer_reviews p;
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_peer_reviews
+   EXCEPT ALL SELECT p.* EXCLUDE (source_hash) FROM out_peer_reviews o, orcid_peer_reviews_xml(o.xml) p)
+  UNION ALL
+  (SELECT p.* EXCLUDE (source_hash) FROM out_peer_reviews o, orcid_peer_reviews_xml(o.xml) p
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_peer_reviews)
+  UNION ALL
+  (SELECT * EXCLUDE (source_hash) FROM src_peer_reviews
+   EXCEPT ALL SELECT p.* EXCLUDE (source_hash) FROM out_peer_reviews o, orcid_peer_reviews_json(o.json) p)
+  UNION ALL
+  (SELECT p.* EXCLUDE (source_hash) FROM out_peer_reviews o, orcid_peer_reviews_json(o.json) p
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_peer_reviews));
+----
+0
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_peer_review_ids
+   EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_peer_reviews o, orcid_external_ids_xml(o.xml) e)
+  UNION ALL
+  (SELECT e.* EXCLUDE (source_hash) FROM out_peer_reviews o, orcid_external_ids_xml(o.xml) e
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_peer_review_ids)
+  UNION ALL
+  (SELECT * EXCLUDE (source_hash) FROM src_peer_review_ids
+   EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_peer_reviews o, orcid_external_ids_json(o.json) e)
+  UNION ALL
+  (SELECT e.* EXCLUDE (source_hash) FROM out_peer_reviews o, orcid_external_ids_json(o.json) e
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_peer_review_ids));
+----
+0
+
+# peer-review-3.0.xsd: review-identifiers hold common:external-id directly; the dates are review-completion-date
+query III
+SELECT contains(xml, '<peer-review:review-identifiers>' || chr(10) || chr(9) || chr(9) || '<common:external-id>'),
+       contains(xml, '<peer-review:review-completion-date>'),
+       contains(json, '"review-identifiers": {')
+FROM out_peer_reviews WHERE doc_hash = (SELECT sha256(doc) FROM docs WHERE name = 'peer-review-full-3.0.xml');
+----
+true	true	true
+
+# ---------------------------------------------------------------- research resource (XML and JSON)
+# The readers cannot tell a proposal's external ids from an item's (same owner,
+# same container), so they are assigned by document order, with the counts of
+# each sample (grep -c '<common:external-id>' per element in the XML; python3 -I
+# len(external-ids.external-id) in the JSON): XML proposal 2, items 2 + 1;
+# JSON proposal 3, items 3 + 1 + 1 + 2 + 2. The JSON proposal has two hosts;
+# the readers (and so the writer) keep the first.
+
+statement ok
+CREATE TABLE src_rr AS
+SELECT r.* FROM (SELECT doc FROM docs WHERE name LIKE 'research-resource-%' AND format = 'xml') d, orcid_research_resources_xml(d.doc) r
+UNION ALL
+SELECT r.* FROM (SELECT doc FROM docs WHERE name LIKE 'research-resource-%' AND format = 'json') d, orcid_research_resources_json(d.doc) r;
+
+statement ok
+CREATE TABLE src_rr_items AS
+SELECT i.* FROM (SELECT doc FROM docs WHERE name LIKE 'research-resource-%' AND format = 'xml') d, orcid_research_resource_items_xml(d.doc) i
+UNION ALL
+SELECT i.* FROM (SELECT doc FROM docs WHERE name LIKE 'research-resource-%' AND format = 'json') d, orcid_research_resource_items_json(d.doc) i;
+
+statement ok
+CREATE TABLE src_rr_ids AS
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'research-resource-%' AND format = 'xml') d, orcid_external_ids_xml(d.doc) e
+UNION ALL
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'research-resource-%' AND format = 'json') d, orcid_external_ids_json(d.doc) e;
+
+statement ok
+CREATE TABLE rr_split (format VARCHAR, first_n INTEGER, last_n INTEGER, item INTEGER);
+
+statement ok
+INSERT INTO rr_split VALUES ('xml', 1, 2, 0), ('xml', 3, 4, 1), ('xml', 5, 5, 2),
+    ('json', 1, 3, 0), ('json', 4, 6, 1), ('json', 7, 7, 2), ('json', 8, 8, 3), ('json', 9, 10, 4), ('json', 11, 12, 5);
+
+statement ok
+CREATE TABLE rr_id_item AS
+SELECT n.rid, s.item
+FROM (SELECT rowid AS rid, source_hash, row_number() OVER (PARTITION BY source_hash ORDER BY rowid) AS n FROM src_rr_ids) n
+JOIN docs d ON sha256(d.doc) = n.source_hash
+JOIN rr_split s ON s.format = d.format AND n.n BETWEEN s.first_n AND s.last_n;
+
+query III
+SELECT (SELECT count(*) FROM src_rr), (SELECT count(*) FROM src_rr_items), (SELECT count(*) FROM rr_id_item);
+----
+2	7	17
+
+statement ok
+CREATE TABLE rec_rr AS
+SELECT r.source_hash AS doc_hash,
+       struct_insert(r,
+           external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_rr_ids e JOIN rr_id_item m ON m.rid = e.rowid
+                            WHERE e.source_hash = r.source_hash AND m.item = 0),
+           resource_items := (SELECT list(struct_insert(i,
+                                     external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_rr_ids e JOIN rr_id_item m ON m.rid = e.rowid
+                                                      WHERE e.source_hash = i.source_hash AND m.item = i.ordinal)) ORDER BY i.ordinal)
+                              FROM src_rr_items i WHERE i.source_hash = r.source_hash)) AS rec
+FROM src_rr r;
+
+statement ok
+CREATE TABLE out_rr AS SELECT doc_hash, orcid_research_resource_to_xml(rec) AS xml, orcid_research_resource_to_json(rec) AS json FROM rec_rr;
+
+query I
+SELECT sum(n)::BIGINT FROM (
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr EXCEPT ALL SELECT r.* EXCLUDE (source_hash) FROM out_rr o, orcid_research_resources_xml(o.xml) r))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT r.* EXCLUDE (source_hash) FROM out_rr o, orcid_research_resources_xml(o.xml) r EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_rr))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr EXCEPT ALL SELECT r.* EXCLUDE (source_hash) FROM out_rr o, orcid_research_resources_json(o.json) r))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT r.* EXCLUDE (source_hash) FROM out_rr o, orcid_research_resources_json(o.json) r EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_rr))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr_items EXCEPT ALL SELECT i.* EXCLUDE (source_hash) FROM out_rr o, orcid_research_resource_items_xml(o.xml) i))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT i.* EXCLUDE (source_hash) FROM out_rr o, orcid_research_resource_items_xml(o.xml) i EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_rr_items))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr_items EXCEPT ALL SELECT i.* EXCLUDE (source_hash) FROM out_rr o, orcid_research_resource_items_json(o.json) i))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT i.* EXCLUDE (source_hash) FROM out_rr o, orcid_research_resource_items_json(o.json) i EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_rr_items))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr_ids EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_rr o, orcid_external_ids_xml(o.xml) e))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT e.* EXCLUDE (source_hash) FROM out_rr o, orcid_external_ids_xml(o.xml) e EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_rr_ids))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr_ids EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_rr o, orcid_external_ids_json(o.json) e))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT e.* EXCLUDE (source_hash) FROM out_rr o, orcid_external_ids_json(o.json) e EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_rr_ids)));
+----
+0
+
+# research-resource-3.0.xsd order: proposal before resource-items; the JSON has no resource-items member
+query III
+SELECT position('<research-resource:proposal>' IN xml) < position('<research-resource:resource-items>' IN xml),
+       contains(json, '"resource-item": [') AND NOT contains(json, '"resource-items"'),
+       contains(json, '"hosts": {' || chr(10) || '      "organization": [')
+FROM out_rr WHERE doc_hash = (SELECT sha256(doc) FROM docs WHERE name = 'research-resource-3.0.xml');
+----
+true	true	true
+
+# ---------------------------------------------------------------- research resource: every host (CROSSCHECK #9)
+# With `hosts` lists (rows of
+# orcid_research_resource_hosts, for the proposal and for each item) every host
+# is written: the XML write sample has one host per proposal and item (1 + 2),
+# the JSON one two proposal hosts (ORCID, NASA) and one per item (2 + 5; python3
+# -I, proposal.hosts.organization and resource-item[i].hosts.organization). The
+# flat first-host fields of the same rows agree with the lists, so both are given.
+
+statement ok
+CREATE TABLE src_rr_hosts AS
+SELECT h.* FROM (SELECT doc FROM docs WHERE name LIKE 'research-resource-%' AND format = 'xml') d, orcid_research_resource_hosts_xml(d.doc) h
+UNION ALL
+SELECT h.* FROM (SELECT doc FROM docs WHERE name LIKE 'research-resource-%' AND format = 'json') d, orcid_research_resource_hosts_json(d.doc) h;
+
+query III
+SELECT count(*), count(*) FILTER (WHERE container = 'proposal'), string_agg(host_name, ',' ORDER BY host_name) FILTER (WHERE container = 'proposal')
+FROM src_rr_hosts;
+----
+10	3	NASA,ORCID,ORCID
+
+statement ok
+CREATE TABLE rec_rr_hosts AS
+SELECT r.source_hash AS doc_hash,
+       struct_insert(r,
+           external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_rr_ids e JOIN rr_id_item m ON m.rid = e.rowid
+                            WHERE e.source_hash = r.source_hash AND m.item = 0),
+           hosts := (SELECT list(h ORDER BY h.ordinal) FROM src_rr_hosts h
+                     WHERE h.source_hash = r.source_hash AND h.container = 'proposal'),
+           resource_items := (SELECT list(struct_insert(i,
+                                     external_ids := (SELECT list(e ORDER BY e.rowid) FROM src_rr_ids e JOIN rr_id_item m ON m.rid = e.rowid
+                                                      WHERE e.source_hash = i.source_hash AND m.item = i.ordinal),
+                                     hosts := (SELECT list(h ORDER BY h.ordinal) FROM src_rr_hosts h
+                                               WHERE h.source_hash = i.source_hash AND h.container = 'resource-item'
+                                                 AND h.item_ordinal = i.ordinal)) ORDER BY i.ordinal)
+                              FROM src_rr_items i WHERE i.source_hash = r.source_hash)) AS rec
+FROM src_rr r;
+
+statement ok
+CREATE TABLE out_rr_hosts AS SELECT doc_hash, orcid_research_resource_to_xml(rec) AS xml, orcid_research_resource_to_json(rec) AS json FROM rec_rr_hosts;
+
+# every host reads back, in XML and in JSON; the other rows are as before
+query I
+SELECT sum(n)::BIGINT FROM (
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr_hosts EXCEPT ALL SELECT h.* EXCLUDE (source_hash) FROM out_rr_hosts o, orcid_research_resource_hosts_xml(o.xml) h))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT h.* EXCLUDE (source_hash) FROM out_rr_hosts o, orcid_research_resource_hosts_xml(o.xml) h EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_rr_hosts))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr_hosts EXCEPT ALL SELECT h.* EXCLUDE (source_hash) FROM out_rr_hosts o, orcid_research_resource_hosts_json(o.json) h))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT h.* EXCLUDE (source_hash) FROM out_rr_hosts o, orcid_research_resource_hosts_json(o.json) h EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_rr_hosts))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr EXCEPT ALL SELECT r.* EXCLUDE (source_hash) FROM out_rr_hosts o, orcid_research_resources_xml(o.xml) r))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_rr_items EXCEPT ALL SELECT i.* EXCLUDE (source_hash) FROM out_rr_hosts o, orcid_research_resource_items_json(o.json) i)));
+----
+0
+
+# without the lists the flat fields still write the first host only (the
+# rec_rr round trip above): the JSON proposal keeps ORCID and loses NASA
+query II
+SELECT (SELECT count(*) FROM out_rr o, orcid_research_resource_hosts_json(o.json) h WHERE h.container = 'proposal'),
+       (SELECT count(*) FROM out_rr_hosts o, orcid_research_resource_hosts_json(o.json) h WHERE h.container = 'proposal');
+----
+2	3
+
+# flat fields that disagree with the list are an error, for the proposal and for an item
+statement error
+SELECT orcid_research_resource_to_xml({'title': 'T', 'host_name': 'A', 'hosts': [{'host_name': 'B'}],
+    'resource_items': [{'resource_name': 'N', 'resource_type': 'equipment', 'host_name': 'H'}]});
+----
+research_resource: 'host_name' is 'A', but the first 'hosts[].host_name' is 'B'
+
+statement error
+SELECT orcid_research_resource_to_xml({'title': 'T', 'host_name': 'A',
+    'resource_items': [{'resource_name': 'N', 'resource_type': 'equipment', 'host_city': 'X', 'hosts': [{'host_name': 'H', 'host_city': NULL}]}]});
+----
+research_resource: 'resource_items[1].host_city' is 'X', but the first 'resource_items[1].hosts[].host_city' is absent
+
+# agreeing fields are fine: the first non-empty value per field, as the readers fill them
+statement ok
+CREATE TABLE rr_agree AS
+SELECT orcid_research_resource_to_xml({'title': 'T', 'host_name': 'A', 'host_country': 'US',
+    'hosts': [{'host_name': 'A', 'host_country': NULL}, {'host_name': 'B', 'host_country': 'US'}],
+    'resource_items': [{'resource_name': 'N', 'resource_type': 'equipment', 'hosts': [{'host_name': 'H', 'host_country': NULL}]}]}) AS x;
+
+query III
+SELECT count(*), string_agg(h.host_name, ',' ORDER BY h.container, h.item_ordinal, h.ordinal),
+       string_agg(coalesce(h.host_country, '-'), ',' ORDER BY h.container, h.item_ordinal, h.ordinal)
+FROM rr_agree t, orcid_research_resource_hosts_xml(t.x) h;
+----
+3	A,B,H	-,US,-
+
+query II
+SELECT r.host_name, r.host_country FROM rr_agree t, orcid_research_resources_xml(t.x) r;
+----
+A	US
+
+# at most 10 hosts (research-resource-3.0.xsd)
+statement error
+SELECT orcid_research_resource_to_xml({'title': 'T', 'hosts': [{'host_name': 'H1'}, {'host_name': 'H2'}, {'host_name': 'H3'}, {'host_name': 'H4'}, {'host_name': 'H5'}, {'host_name': 'H6'}, {'host_name': 'H7'}, {'host_name': 'H8'}, {'host_name': 'H9'}, {'host_name': 'H10'}, {'host_name': 'H11'}],
+    'resource_items': [{'resource_name': 'N', 'resource_type': 'equipment', 'host_name': 'H'}]});
+----
+research_resource: 'hosts' has 11 items, but research-resource-3.0.xsd allows at most 10 hosts
+
+# a list item is an organization: it needs its name
+statement error
+SELECT orcid_research_resource_to_xml({'title': 'T', 'hosts': [{'host_name': NULL, 'host_city': 'C'}],
+    'resource_items': [{'resource_name': 'N', 'resource_type': 'equipment', 'host_name': 'H'}]});
+----
+'hosts[1].host_name' is required
+
+# neither a list nor flat fields: the hosts are missing
+statement error
+SELECT orcid_research_resource_to_xml({'title': 'T', 'resource_items': [{'resource_name': 'N', 'resource_type': 'equipment', 'host_name': 'H'}]});
+----
+'host_name' is required (research-resource:hosts)
+
+# the list's fields are the columns of orcid_research_resource_hosts
+statement error
+SELECT orcid_research_resource_to_xml({'title': 'T', 'hosts': [{'host_nam': 'H'}],
+    'resource_items': [{'resource_name': 'N', 'resource_type': 'equipment', 'host_name': 'H'}]});
+----
+unknown field 'hosts[].host_nam'
+
+# ---------------------------------------------------------------- person items: address, keyword, other name, researcher url (with and without a name), external identifier
+
+statement ok
+CREATE TABLE src_person_items AS
+SELECT p.* FROM (SELECT doc FROM docs WHERE format = 'xml' AND name IN ('address-3.0.xml', 'keyword-3.0.xml', 'other-name-3.0.xml',
+    'researcher-url-3.0.xml', 'researcher-url-3.0-no-name.xml', 'external-identifier-3.0.xml')) d, orcid_person_items_xml(d.doc) p
+UNION ALL
+SELECT p.* FROM (SELECT doc FROM docs WHERE name IN ('address-3.0.json', 'researcher-url-3.0.json', 'researcher-url-no-name-3.0.json',
+    'external-identifier-3.0.json')) d, orcid_person_items_json(d.doc) p
+UNION ALL
+SELECT p.* FROM (SELECT doc FROM docs WHERE name = 'keywords-3.0.json') d, orcid_person_items_json(d.doc, json_root := 'keyword') p
+UNION ALL
+SELECT p.* FROM (SELECT doc FROM docs WHERE name = 'other-names-3.0.json') d, orcid_person_items_json(d.doc, json_root := 'other-name') p;
+
+query II
+SELECT count(*), string_agg(DISTINCT kind, ',' ORDER BY kind) FROM src_person_items;
+----
+12	address,external-identifier,keyword,other-name,researcher-url
+
+statement ok
+CREATE TABLE out_person_items AS
+SELECT kind, orcid_person_item_to_xml(p) AS xml, orcid_person_item_to_json(p) AS json FROM src_person_items p;
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_person_items
+   EXCEPT ALL SELECT p.* EXCLUDE (source_hash) FROM out_person_items o, orcid_person_items_xml(o.xml) p)
+  UNION ALL
+  (SELECT p.* EXCLUDE (source_hash) FROM out_person_items o, orcid_person_items_xml(o.xml) p
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_person_items));
+----
+0
+
+# JSON readback: keyword and other-name need json_root ({"content": ...} either way)
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_person_items
+   EXCEPT ALL
+   (SELECT p.* EXCLUDE (source_hash) FROM (SELECT json FROM out_person_items WHERE kind NOT IN ('keyword', 'other-name')) o, orcid_person_items_json(o.json) p
+    UNION ALL
+    SELECT p.* EXCLUDE (source_hash) FROM (SELECT json FROM out_person_items WHERE kind = 'keyword') o, orcid_person_items_json(o.json, json_root := 'keyword') p
+    UNION ALL
+    SELECT p.* EXCLUDE (source_hash) FROM (SELECT json FROM out_person_items WHERE kind = 'other-name') o, orcid_person_items_json(o.json, json_root := 'other-name') p))
+  UNION ALL
+  ((SELECT p.* EXCLUDE (source_hash) FROM (SELECT json FROM out_person_items WHERE kind NOT IN ('keyword', 'other-name')) o, orcid_person_items_json(o.json) p
+    UNION ALL
+    SELECT p.* EXCLUDE (source_hash) FROM (SELECT json FROM out_person_items WHERE kind = 'keyword') o, orcid_person_items_json(o.json, json_root := 'keyword') p
+    UNION ALL
+    SELECT p.* EXCLUDE (source_hash) FROM (SELECT json FROM out_person_items WHERE kind = 'other-name') o, orcid_person_items_json(o.json, json_root := 'other-name') p)
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_person_items));
+----
+0
+
+# address-3.0.xsd: <address:country>; researcher-url-3.0.xsd: url-name before url
+query II
+SELECT (SELECT bool_and(contains(xml, '<address:country>')) FROM out_person_items WHERE kind = 'address'),
+       (SELECT bool_and(position('<researcher-url:url-name>' IN xml) < position('<researcher-url:url>' IN xml))
+        FROM out_person_items WHERE kind = 'researcher-url' AND contains(xml, 'url-name'));
+----
+true	true
+
+# ---------------------------------------------------------------- group ids: peer-review-group-id.json and group-id-3.0/samples/group-id-3.0.xml
+
+statement ok
+CREATE TABLE src_group_ids AS
+SELECT * FROM orcid_group_ids('reference/orcid-model/record_3.0/samples/write_samples/peer-review-group-id.json')
+UNION ALL
+SELECT * FROM orcid_group_ids('reference/orcid-model/group-id-3.0/samples/group-id-3.0.xml');
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_group_ids
+   EXCEPT ALL SELECT g.* EXCLUDE (source_hash) FROM src_group_ids s, orcid_group_ids_xml(orcid_group_id_to_xml(s)) g)
+  UNION ALL
+  (SELECT g.* EXCLUDE (source_hash) FROM src_group_ids s, orcid_group_ids_xml(orcid_group_id_to_xml(s)) g
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_group_ids)
+  UNION ALL
+  (SELECT * EXCLUDE (source_hash) FROM src_group_ids
+   EXCEPT ALL SELECT g.* EXCLUDE (source_hash) FROM src_group_ids s, orcid_group_ids_json(orcid_group_id_to_json(s)) g)
+  UNION ALL
+  (SELECT g.* EXCLUDE (source_hash) FROM src_group_ids s, orcid_group_ids_json(orcid_group_id_to_json(s)) g
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_group_ids));
+----
+0
+
+query I
+SELECT replace(orcid_group_id_to_json(g), chr(10), '\n') FROM src_group_ids g WHERE type = 'magazine';
+----
+{\n  "name": "Group ID name",\n  "group-id": "ringgold:355321",\n  "description": "Description for a peer-review group id.",\n  "type": "magazine"\n}\n
+
+# ---------------------------------------------------------------- bulk works: bulk-work-3.0 (xml, json), bulk-works-3-works, bulk-works-100-works
+# One external id per work in all four (python3 -I; grep -c on the XML), so
+# the k-th id of a document belongs to its k-th work. Contributors: only the
+# second work of bulk-works-3-works-3.0.json has any (one); bulk-works-100's
+# are not reassembled (they cannot be told apart by work), so its contributors
+# are not compared.
+
+statement ok
+CREATE TABLE src_bulk_works AS
+SELECT w.* FROM (SELECT doc FROM docs WHERE name LIKE 'bulk-%' AND format = 'xml') d, orcid_works_xml(d.doc) w
+UNION ALL
+SELECT w.* FROM (SELECT doc FROM docs WHERE name LIKE 'bulk-%' AND format = 'json') d, orcid_works_json(d.doc) w;
+
+statement ok
+CREATE TABLE src_bulk_ids AS
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'bulk-%' AND format = 'xml') d, orcid_external_ids_xml(d.doc) e
+UNION ALL
+SELECT e.* FROM (SELECT doc FROM docs WHERE name LIKE 'bulk-%' AND format = 'json') d, orcid_external_ids_json(d.doc) e;
+
+statement ok
+CREATE TABLE src_bulk_contributors AS
+SELECT c.* FROM (SELECT doc FROM docs WHERE name = 'bulk-works-3-works-3.0.json') d, orcid_contributors_json(d.doc) c;
+
+query III
+SELECT (SELECT count(*) FROM src_bulk_works), (SELECT count(*) FROM src_bulk_ids), (SELECT count(*) FROM src_bulk_contributors);
+----
+107	107	1
+
+statement ok
+CREATE TABLE rec_bulk AS
+SELECT w.source_hash AS doc_hash, wn.n,
+       struct_insert(w,
+           external_ids := (SELECT list(e) FROM src_bulk_ids e
+                            JOIN (SELECT rowid AS rid, row_number() OVER (PARTITION BY source_hash ORDER BY rowid) AS n FROM src_bulk_ids) en
+                              ON en.rid = e.rowid
+                            WHERE e.source_hash = w.source_hash AND en.n = wn.n),
+           contributors := (SELECT list(c ORDER BY c.ordinal) FROM src_bulk_contributors c
+                            WHERE c.source_hash = w.source_hash AND wn.n = 2)) AS rec
+FROM src_bulk_works w
+JOIN (SELECT rowid AS rid, row_number() OVER (PARTITION BY source_hash ORDER BY rowid) AS n FROM src_bulk_works) wn ON wn.rid = w.rowid;
+
+statement ok
+CREATE TABLE out_bulk AS
+SELECT doc_hash, orcid_bulk_works_to_xml(list(rec ORDER BY n)) AS xml, orcid_bulk_works_to_json(list(rec ORDER BY n)) AS json
+FROM rec_bulk GROUP BY doc_hash;
+
+query I
+SELECT sum(n)::BIGINT FROM (
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_bulk_works EXCEPT ALL SELECT w.* EXCLUDE (source_hash) FROM out_bulk o, orcid_works_xml(o.xml) w))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT w.* EXCLUDE (source_hash) FROM out_bulk o, orcid_works_xml(o.xml) w EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_bulk_works))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_bulk_works EXCEPT ALL SELECT w.* EXCLUDE (source_hash) FROM out_bulk o, orcid_works_json(o.json) w))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT w.* EXCLUDE (source_hash) FROM out_bulk o, orcid_works_json(o.json) w EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_bulk_works))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_bulk_ids EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_bulk o, orcid_external_ids_xml(o.xml) e))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT e.* EXCLUDE (source_hash) FROM out_bulk o, orcid_external_ids_xml(o.xml) e EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_bulk_ids))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT * EXCLUDE (source_hash) FROM src_bulk_ids EXCEPT ALL SELECT e.* EXCLUDE (source_hash) FROM out_bulk o, orcid_external_ids_json(o.json) e))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT e.* EXCLUDE (source_hash) FROM out_bulk o, orcid_external_ids_json(o.json) e EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_bulk_ids)));
+----
+0
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM src_bulk_contributors
+   EXCEPT ALL SELECT c.* EXCLUDE (source_hash) FROM out_bulk o, orcid_contributors_json(o.json) c
+              WHERE o.doc_hash = (SELECT sha256(doc) FROM docs WHERE name = 'bulk-works-3-works-3.0.json'))
+  UNION ALL
+  (SELECT c.* EXCLUDE (source_hash) FROM out_bulk o, orcid_contributors_json(o.json) c
+   WHERE o.doc_hash = (SELECT sha256(doc) FROM docs WHERE name = 'bulk-works-3-works-3.0.json')
+   EXCEPT ALL SELECT * EXCLUDE (source_hash) FROM src_bulk_contributors));
+----
+0
+
+# bulk-3.0.xsd: <bulk:bulk> holding work:work elements; JSON {"bulk": [{"work": ...}]}
+query II
+SELECT starts_with(xml, '<?xml version="1.0" encoding="UTF-8"?>' || chr(10) || '<bulk:bulk xmlns:bulk="http://www.orcid.org/ns/bulk" xmlns:common="http://www.orcid.org/ns/common" xmlns:work="http://www.orcid.org/ns/work">'),
+       starts_with(json, '{' || chr(10) || '  "bulk": [' || chr(10) || '    {' || chr(10) || '      "work": {')
+FROM out_bulk WHERE doc_hash = (SELECT sha256(doc) FROM docs WHERE name = 'bulk-work-3.0.xml');
+----
+true	true
+
+# ORCID's limit: at most 100 works per bulk request (bulk-works-100-works-3.0.json is at it)
+query I
+SELECT count(*) FROM orcid_works_xml((SELECT orcid_bulk_works_to_xml(list({'title': 'Work ' || i, 'type': 'other'})) FROM range(100) t(i)));
+----
+100
+
+statement error
+SELECT orcid_bulk_works_to_xml(list({'title': 'Work ' || i, 'type': 'other'})) FROM range(101) t(i);
+----
+ORCID accepts at most 100 per bulk request
+
+statement error
+SELECT orcid_bulk_works_to_json(list(rec) || [first(rec)]) FROM rec_bulk
+WHERE doc_hash = (SELECT sha256(doc) FROM docs WHERE name = 'bulk-works-100-works-3.0.json');
+----
+101 works
+
+statement error
+SELECT orcid_bulk_works_to_xml([]::STRUCT(title VARCHAR, type VARCHAR)[]);
+----
+at least one work
+
+query I
+SELECT orcid_bulk_works_to_xml(NULL) IS NULL;
+----
+true
+
+# ---------------------------------------------------------------- output format, read-only fields, derived fields
+
+query I
+SELECT replace(replace(orcid_work_to_xml({'title': 'T', 'type': 'other'}), chr(10), '\n'), chr(9), '\t');
+----
+<?xml version="1.0" encoding="UTF-8"?>\n<work:work xmlns:common="http://www.orcid.org/ns/common" xmlns:work="http://www.orcid.org/ns/work">\n\t<work:title>\n\t\t<common:title>T</common:title>\n\t</work:title>\n\t<work:type>other</work:type>\n</work:work>\n
+
+query I
+SELECT replace(orcid_work_to_json({'title': 'T', 'type': 'other'}), chr(10), '\n');
+----
+{\n  "title": {\n    "title": {\n      "value": "T"\n    }\n  },\n  "type": "other"\n}\n
+
+# put-code (an update needs it) and visibility are written: an attribute in XML, a member in JSON (a number for
+# put-code); source, dates, path and display index are read-only and are not
+query IIIII
+SELECT contains(x, '<work:work xmlns:common="http://www.orcid.org/ns/common" xmlns:work="http://www.orcid.org/ns/work" put-code="7" visibility="public">'),
+       contains(j, '"put-code": 7,') AND contains(j, '"visibility": "public"'),
+       NOT contains(x, 'source') AND NOT contains(x, 'created') AND NOT contains(x, 'display-index') AND NOT contains(x, 'path='),
+       contains(x, '<common:month>02</common:month>') AND contains(x, '<common:day>09</common:day>'),
+       contains(j, '"day": {' || chr(10) || '      "value": "09"')
+FROM (SELECT orcid_work_to_xml(r) AS x, orcid_work_to_json(r) AS j
+      FROM (SELECT {'put_code': 7, 'visibility': 'public', 'title': 'T', 'type': 'other', 'pub_year': 2001, 'pub_month': 2,
+                    'pub_day': 9, 'source_name': 'S', 'created': '2020-01-01T00:00:00.000Z', 'path': '/p', 'display_index': 3} AS r));
+----
+true	true	true	true	true
+
+# a contributor's contributor-orcid host is written after uri and path (common:orcid-id;
+# write_samples/work-full-3.0.xml lines 46-50 carry it), and needs the path
+query II
+SELECT contains(x, '<common:path>0000-0002-1825-0097</common:path>' || chr(10) || chr(9) || chr(9) || chr(9) || chr(9) || '<common:host>orcid.org</common:host>'),
+       (SELECT contributor_orcid_host FROM orcid_contributors_xml(x))
+FROM (SELECT orcid_work_to_xml({'title': 'T', 'type': 'other',
+          'contributors': [{'contributor_orcid': '0000-0002-1825-0097', 'contributor_orcid_host': 'orcid.org'}]}) AS x);
+----
+true	orcid.org
+
+statement error
+SELECT orcid_work_to_xml({'title': 'T', 'type': 'other', 'contributors': [{'contributor_orcid_host': 'orcid.org', 'credit_name': 'A'}]});
+----
+'contributors[1].contributor_orcid_host' needs 'contributors[1].contributor_orcid'
+
+# a work's doi without external_ids becomes its self DOI identifier; given external_ids win
+query III
+SELECT (SELECT doi FROM orcid_works_xml(orcid_work_to_xml({'title': 'T', 'type': 'other', 'doi': '10.1/X'}))),
+       (SELECT type || ' ' || value || ' ' || relationship FROM orcid_external_ids_xml(orcid_work_to_xml({'title': 'T', 'type': 'other', 'doi': '10.1/X'}))),
+       (SELECT count(*) FROM orcid_external_ids_xml(orcid_work_to_xml({'title': 'T', 'type': 'other', 'doi': '10.1/X',
+                                                                     'external_ids': [{'type': 'isbn', 'value': '1', 'relationship': 'self'}]})));
+----
+10.1/x	doi 10.1/X self	1
+
+query I
+SELECT orcid_work_to_xml(NULL) IS NULL;
+----
+true
+
+# ---------------------------------------------------------------- escaping
+
+# XML: & < > in text; " and < in attributes; CR as &#13;; non-BMP characters as UTF-8
+query IIII
+SELECT contains(x, '<common:title>a &lt; b &amp; "c" ''d'' &gt; e &#13; ' || chr(128512) || '</common:title>'),
+       contains(x, 'visibility="pub&quot;lic&lt;"'),
+       (SELECT title FROM orcid_works_xml(x)) = 'a < b & "c" ''d'' > e ' || chr(13) || ' ' || chr(128512),
+       (SELECT visibility FROM orcid_works_xml(x)) = 'pub"lic<'
+FROM (SELECT orcid_work_to_xml({'title': 'a < b & "c" ''d'' > e ' || chr(13) || ' ' || chr(128512), 'type': 'other', 'visibility': 'pub"lic<'}) AS x);
+----
+true	true	true	true
+
+# JSON: " \ and control characters escaped (\n \t \uXXXX), U+2028 as  , non-BMP characters as UTF-8
+query II
+SELECT contains(j, '"value": "\"q\" \\ x\n\t\u0001   ' || chr(128512) || '"'),
+       (SELECT title FROM orcid_works_json(j)) = '"q" \ x' || chr(10) || chr(9) || chr(1) || ' ' || chr(8232) || ' ' || chr(128512)
+FROM (SELECT orcid_work_to_json({'title': '"q" \ x' || chr(10) || chr(9) || chr(1) || ' ' || chr(8232) || ' ' || chr(128512), 'type': 'other'}) AS j);
+----
+true	true
+
+# XML 1.0 cannot carry U+0001 at all, so it is an error rather than a document
+statement error
+SELECT orcid_work_to_xml({'title': 'bell' || chr(1), 'type': 'other'});
+----
+cannot be written in XML 1.0
+
+# (invalid UTF-8 cannot reach a VARCHAR in DuckDB; the core refuses it: test/cpp/core_test.cpp, TestWriterOutput)
+
+# ---------------------------------------------------------------- input checks
+
+statement error
+SELECT orcid_work_to_xml({'titel': 'T', 'type': 'other'});
+----
+unknown field 'titel'
+
+statement error
+SELECT orcid_work_to_xml({'title': 'T', 'type': 'other', 'external_ids': [{'typ': 'doi', 'value': 'x'}]});
+----
+unknown field 'external_ids[].typ'
+
+statement error
+SELECT orcid_work_to_xml({'title': 'T', 'type': 'other', 'external_ids': 'x'});
+----
+must be a LIST of STRUCT
+
+statement error
+SELECT orcid_work_to_xml('T');
+----
+must be a STRUCT
+
+statement error
+SELECT orcid_work_to_json({'type': 'other'});
+----
+'title' is required
+
+statement error
+SELECT orcid_work_to_xml({'title': 'T', 'type': 'other', 'translated_title': 'U'});
+----
+'translated_title_language' is required with 'translated_title'
+
+statement error
+SELECT orcid_work_to_xml({'title': 'T', 'type': 'other', 'pub_year': 1850});
+----
+outside the schema's range 1900..2100
+
+statement error
+SELECT orcid_funding_to_xml({'type': 'grant', 'title': 'T'});
+----
+'org_name' is required
+
+# funding-3.0.xsd's contributor-attributes have no contributor-sequence: a
+# funding contributor's sequence is an error (as yorc-rs's Error::Unwritable),
+# not a value silently dropped
+statement error
+SELECT orcid_funding_to_xml({'type': 'grant', 'org_name': 'O',
+                             'contributors': [{'credit_name': 'A', 'role': 'lead'}, {'credit_name': 'B', 'sequence': 'first'}]});
+----
+funding/contributors/contributor[2]/contributor-attributes/contributor-sequence
+
+statement error
+SELECT orcid_funding_to_json({'type': 'grant', 'org_name': 'O', 'contributors': [{'credit_name': 'B', 'sequence': 'additional'}]});
+----
+'contributors[1].sequence' (funding/contributors/contributor[1]/contributor-attributes/contributor-sequence): a funding contributor has no contributor-sequence (funding-3.0.xsd)
+
+# a NULL or blank sequence is absent, as every field: written without it
+query I
+SELECT contains(orcid_funding_to_xml({'type': 'grant', 'org_name': 'O',
+                                      'contributors': [{'credit_name': 'B', 'sequence': NULL, 'role': 'lead'},
+                                                       {'credit_name': 'C', 'sequence': ' ', 'role': 'lead'}]}),
+                '<funding:contributor-role>lead</funding:contributor-role>');
+----
+true
+
+statement error
+SELECT orcid_affiliation_to_xml({'org_name': 'O'});
+----
+'affiliation_type' is required
+
+statement error
+SELECT orcid_person_item_to_xml({'kind': 'email', 'value': 'a@b.c'});
+----
+kind must be one of
+
+statement error
+SELECT orcid_research_resource_to_xml({'title': 'T', 'host_name': 'H'});
+----
+'resource_items' needs at least one item
+
+statement error
+SELECT orcid_peer_review_to_xml({'reviewer_role': 'reviewer', 'review_type': 'review', 'review_group_id': 'issn:1234-5678',
+                                 'completion_year': 2020, 'convening_org_name': 'O',
+                                 'external_ids': [{'container': 'peer-review', 'type': 'doi', 'value': '1'},
+                                                  {'container': 'peer-review', 'type': 'doi', 'value': '2'}]});
+----
+more than one external_ids item has container 'peer-review'

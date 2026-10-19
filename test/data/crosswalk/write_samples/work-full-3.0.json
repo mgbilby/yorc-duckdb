@@ -1,0 +1,79 @@
+{
+  "citation": {
+    "citation-type": "bibtex",
+    "citation-value": "@article {ORCID2012,\n\t\t\ttitle = \"ORCID: a system to uniquely identify researchers\",\n\t\t\tjournal = \"Learned Publishing\",\n\t\t\tyear = \"2012\",\n\t\t\tdoi = \"doi:10.1087/20120404\"\n\t\t\t}"
+  },
+  "contributors": {
+    "contributor": [
+      {
+        "contributor-attributes": {
+          "contributor-role": "author",
+          "contributor-sequence": "first"
+        },
+        "contributor-orcid": {
+          "host": "orcid.org",
+          "path": "0000-0001-5109-3700",
+          "uri": "https://orcid.org/0000-0001-5109-3700"
+        },
+        "credit-name": {
+          "value": "Laure L. Haak"
+        }
+      }
+    ]
+  },
+  "country": {
+    "value": "US"
+  },
+  "external-ids": {
+    "external-id": [
+      {
+        "external-id-relationship": "version-of",
+        "external-id-type": "doi",
+        "external-id-url": {
+          "value": "https://doi.org/10.1087/20120404"
+        },
+        "external-id-value": "10.1087/20120404"
+      },
+      {
+        "external-id-relationship": "self",
+        "external-id-type": "doi",
+        "external-id-url": {
+          "value": "http://orcid.org"
+        },
+        "external-id-value": "work:doi"
+      }
+    ]
+  },
+  "journal-title": {
+    "value": "Journal Title"
+  },
+  "language-code": "en",
+  "publication-date": {
+    "day": {
+      "value": "01"
+    },
+    "month": {
+      "value": "10"
+    },
+    "year": {
+      "value": "2012"
+    }
+  },
+  "short-description": "Short description",
+  "title": {
+    "subtitle": {
+      "value": "Sub title"
+    },
+    "title": {
+      "value": "Work Title"
+    },
+    "translated-title": {
+      "language-code": "en",
+      "value": "Translated-title"
+    }
+  },
+  "type": "journal-article",
+  "url": {
+    "value": "http://alt-uri.org"
+  }
+}

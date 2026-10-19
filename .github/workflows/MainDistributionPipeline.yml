@@ -1,0 +1,40 @@
+# Standard DuckDB community-extension pipeline (C++ / CMake variant), mirroring
+# duckdb/extension-template and mgbilby/duckdb-marc21. DuckDB, the reusable
+# workflow and the submodules are all pinned at v1.5.6 for the released
+# extension; this is the same workflow duckdb/community-extensions runs on the
+# commit named in description.yml, so a green run here predicts the registry build.
+#
+# A second job builds against the DuckDB v2.0 pre-release so the v2.0 port can
+# be checked before the release lands. It is workflow_dispatch only: v2.0 is a
+# moving branch, so a red run there says nothing about the shipped extension
+# and must not gate pushes. duckdb and extension-ci-tools both have a
+# v2.0-cyanoptera branch, which this job pairs (community-extensions'
+# build_next.yml has used ci_tools_version: main; switch to main if the
+# branch lags). See docs/DUCKDB2.md for moving the stable job to v2.0.
+name: Main Extension Distribution Pipeline
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}
+  cancel-in-progress: true
+
+jobs:
+  duckdb-stable-build:
+    name: Build extension binaries
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.6
+    with:
+      duckdb_version: v1.5.6
+      ci_tools_version: v1.5.6
+      extension_name: yorc
+
+  duckdb-next-build:
+    name: Build against DuckDB v2.0 pre-release (manual)
+    if: github.event_name == 'workflow_dispatch'
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
+    with:
+      duckdb_version: v2.0-cyanoptera
+      ci_tools_version: v2.0-cyanoptera
+      extension_name: yorc

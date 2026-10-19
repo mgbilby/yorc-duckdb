@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<work:work xmlns:work="http://www.orcid.org/ns/work" xmlns:common="http://www.orcid.org/ns/common" put-code="1">
+	<work:title>
+		<common:title>Café culture</common:title>
+	</work:title>
+	<work:type>other</work:type>
+</work:work>

@@ -1,0 +1,73 @@
+# name: test/sql/orcid_works.test
+# description: orcid_works over files; expected values from an independent reference parser
+# group: [orcid]
+
+require yorc
+
+query IIII
+SELECT count(*), count(DISTINCT group_index), count(DISTINCT orcid), sum(put_code)
+FROM orcid_works('test/data/0000-0003-0100-6634.xml');
+----
+382	155	1	36003218443
+
+query IIIIIIII
+SELECT count(subtitle), count(journal), count(pub_month), count(pub_day),
+       count(doi), count(DISTINCT doi), count(url), format('{}-{}', min(pub_year), max(pub_year))
+FROM orcid_works('test/data/0000-0003-0100-6634.xml');
+----
+0	371	334	298	311	226	84	2002-2025
+
+query IIIIIIIIIIIIIIIIII
+SELECT orcid, put_code, group_index, display_index, title, subtitle, journal, type, pub_year, pub_month, pub_day,
+       doi, url, source_name, visibility, created, last_modified, source_hash
+FROM orcid_works('test/data/0000-0003-0100-6634.xml') WHERE put_code = 182082411;
+----
+0000-0003-0100-6634	182082411	1	1	mgbilby/oga_src: initial oga_src release	NULL	Zenodo	software	2025	4	11	10.5281/zenodo.15199545	NULL	DataCite	public	2025-04-11T18:39:27.813Z	2025-04-11T18:39:27.813Z	494662244addfd21664a3a56f222a88614b83f61084888ac6162eeb970324801
+
+query IIIII
+SELECT group_index, display_index, type, pub_year, doi
+FROM orcid_works('test/data/0000-0003-0100-6634.xml') WHERE put_code = 72106251;
+----
+155	0	dissertation-thesis	2002	10.5281/zenodo.3752256
+
+query II
+SELECT type, count(*) FROM orcid_works('test/data/0000-0003-0100-6634.xml')
+GROUP BY type ORDER BY count(*) DESC, type LIMIT 3;
+----
+other	94
+book	85
+journal-article	48
+
+# UTF-8 passes through untouched
+query I
+SELECT count(*) FROM orcid_works('test/data/0000-0003-0100-6634.xml')
+WHERE title = 'BeDuhn’s Greek Reconstruction of Marcion’s Gospel';
+----
+3
+
+# globs read every matching file
+query I
+SELECT count(*) FROM orcid_works('test/data/*.xml');
+----
+382
+
+# Missing files are a clean error. The wording differs by engine (v1.5.x:
+# "Cannot open file" / "No files found"; v2.0 multi-file framework: "No files
+# found that match the pattern"), so match on the file name, which both report.
+statement error
+SELECT * FROM orcid_works('test/data/does-not-exist.xml');
+----
+does-not-exist.xml
+
+statement error
+SELECT * FROM orcid_works('test/data/does-not-exist-*.xml');
+----
+does-not-exist-*.xml
+
+
+# columns added after the original 18 (contract order is preserved)
+query IIIII
+SELECT translated_title, citation_type, source_client_id, item, path
+FROM orcid_works('test/data/0000-0003-0100-6634.xml') WHERE put_code = 182082411;
+----
+NULL	NULL	0000-0001-8099-6984	work-summary	/0000-0003-0100-6634/work/182082411

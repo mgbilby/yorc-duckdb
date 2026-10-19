@@ -1,0 +1,94 @@
+# name: test/sql/orcid_dump_sample.test
+# description: orcid_dump_sample picks the members yorc-rs's dump::Reservoir and yorc-zig's reservoir pick (SplitMix64, Algorithm R)
+# group: [orcid]
+#
+# Expected values: the archive listings (tar -tzvf),
+# the MOD 11-2 check of each member stem, and the draws of SplitMix64 as
+# specified in yorc-rs/src/dump/reservoir.rs (computed by hand from that
+# definition; the same vectors are in test/cpp/core_test.cpp, TestReservoir).
+
+require yorc
+
+# The dump fixture: two members named by a valid iD, in archive order
+# 0000-0003-0100-6634 then 8888-8888-8888-8880 (README.txt is not .xml; the
+# works document's stem holds no valid iD). Capacity 1: the first is kept, and
+# the second replaces it iff SplitMix64(seed).below(2) = 0. Seed 42 draws 1
+# (the Rust and Zig walkthroughs, cell 8: 0000-0003-0100-6634), seed 7 draws 0.
+query IIIII
+SELECT slot, orcid, member, name, eligible FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 1, 42);
+----
+0	0000-0003-0100-6634	ORCID_test_summaries/634/0000-0003-0100-6634.xml	0000-0003-0100-6634.xml	2
+
+query II
+SELECT orcid, eligible FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 1, 7);
+----
+8888-8888-8888-8880	2
+
+# n = 5 (the bench's dump_sample workload): both are kept, in slot order
+query II
+SELECT slot, orcid FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 5, 42);
+----
+0	0000-0003-0100-6634
+1	8888-8888-8888-8880
+
+# the same picks from the .tgz name and from the pax tar
+query II
+SELECT orcid, eligible FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tgz', 1, 42);
+----
+0000-0003-0100-6634	2
+
+query II
+SELECT orcid, eligible FROM orcid_dump_sample('test/data/dump/orcid_test_summaries_pax.tar', 1, 7);
+----
+8888-8888-8888-8880	2
+
+# the kept member's document, read only when the xml column is asked for
+query II
+SELECT strlen(xml), file FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 1, 42);
+----
+1324198	test/data/dump/orcid_test_summaries.tar.gz
+
+# n = 0 keeps nothing
+query I
+SELECT count(*) FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 0, 42);
+----
+0
+
+# five records (test/data/releases, 2024 release): 0000-0002-2759-4000,
+# 0000-0002-9600-9004, 0009-0000-8621-6002, 0009-0004-7374-2002,
+# 0009-0008-6715-4000. Capacity 2, seed 42: items 0 and 1 are appended, then
+# below(3) = 2 (item 2 skipped), below(4) = 0 (item 3 in slot 0), below(5) = 1
+# (item 4 in slot 1).
+query II
+SELECT slot, orcid FROM orcid_dump_sample('test/data/releases/ORCID_2024_10_summaries.tar.gz', 2, 42) ORDER BY slot;
+----
+0	0009-0004-7374-2002
+1	0009-0008-6715-4000
+
+# a glob of archives is one stream, in path order (2024 then 2025: ten records)
+query I
+SELECT DISTINCT eligible FROM orcid_dump_sample('test/data/releases/ORCID_20*_summaries.tar.gz', 3, 1);
+----
+10
+
+# max_member_bytes applies to a kept member when its xml is read
+statement error
+SELECT xml FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 1, 42, max_member_bytes := 1000);
+----
+over max_member_bytes
+
+# ... and not otherwise: nothing is read
+query I
+SELECT orcid FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 1, 42, max_member_bytes := 1000);
+----
+0000-0003-0100-6634
+
+statement error
+SELECT * FROM orcid_dump_sample('test/data/0000-0003-0100-6634.xml', 1, 42);
+----
+is not a .tar, .tar.gz or .tgz archive
+
+statement error
+SELECT * FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', -1, 42);
+----
+n must be >= 0

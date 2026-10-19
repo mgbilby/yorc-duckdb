@@ -1,0 +1,73 @@
+# name: test/sql/orcid_activity_items.test
+# description: a full activity document (one work from the Public Data File activities archive, CC0) yields rows only in the activity sections; record-only and API message sections stay empty (anchored item patterns)
+# group: [orcid]
+
+require yorc
+
+# expected counts by grep on the fixture: one <work:work>, one <work:contributor>,
+# one <common:external-id>; created != last modified, so two timeline events
+query IIIIIIII
+SELECT (SELECT count(*) FROM orcid_works('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_fundings('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_affiliations('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_peer_reviews('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_research_resources('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_contributors('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_external_ids('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_timeline('test/data/activities/0000-0002-8635-8390_works_30089981.xml'));
+----
+1	0	0	0	0	1	1	2
+
+# record-only and API message sections: no rows from a full activity document
+query IIIIIIIIII
+SELECT (SELECT count(*) FROM orcid_person('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_person_items('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_history('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_summary('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_summary_items('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_search_results('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_errors('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_notifications('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_group_ids('test/data/activities/0000-0002-8635-8390_works_30089981.xml')),
+       (SELECT count(*) FROM orcid_research_resource_items('test/data/activities/0000-0002-8635-8390_works_30089981.xml'));
+----
+0	0	0	0	0	0	0	0	0	0
+
+query IIIIII
+SELECT orcid, put_code, item, title, doi, source_name
+FROM orcid_works('test/data/activities/0000-0002-8635-8390_works_30089981.xml');
+----
+0000-0002-8635-8390	30089981	work	Gaussian Job Archive for C21H23N3O3	10.6084/m9.figshare.1119230	DataCite
+
+query III
+SELECT credit_name, contributor_orcid, owner_put_code
+FROM orcid_contributors('test/data/activities/0000-0002-8635-8390_works_30089981.xml');
+----
+Henry Rzepa	0000-0002-8635-8390	30089981
+
+# a record and an item derived together, as the CLIs do (CONTRACT.md pinned
+# INSERT over a stage table): person and history come from the record only
+statement ok
+CREATE TEMP TABLE stage AS
+SELECT regexp_extract(filename, '([0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X])', 1) AS orcid,
+       sha256(content) AS source_hash, content AS xml
+FROM read_text(['test/data/0000-0003-0100-6634.xml', 'test/data/activities/0000-0002-8635-8390_works_30089981.xml']);
+
+query IIII
+SELECT (SELECT count(*) FROM stage s, orcid_person_xml(s.xml) w),
+       (SELECT count(DISTINCT s.orcid) FROM stage s, orcid_person_xml(s.xml) w),
+       (SELECT count(*) FROM stage s, orcid_history_xml(s.xml) w),
+       (SELECT count(*) FROM stage s, orcid_works_xml(s.xml) w WHERE s.orcid = '0000-0002-8635-8390');
+----
+1	1	1	1
+
+# elements named like record-only / API message items, nested where the XSDs
+# do not put them, are not items
+query IIIIIIII
+SELECT (SELECT count(*) FROM orcid_person_xml(x)), (SELECT count(*) FROM orcid_history_xml(x)),
+       (SELECT count(*) FROM orcid_errors_xml(x)), (SELECT count(*) FROM orcid_notifications_xml(x)),
+       (SELECT count(*) FROM orcid_summary_xml(x)), (SELECT count(*) FROM orcid_search_results_xml(x)),
+       (SELECT count(*) FROM orcid_group_ids_xml(x)), (SELECT count(*) FROM orcid_works_xml(x))
+FROM (SELECT '<work:work xmlns:work="w" xmlns:x="x" put-code="1" path="/0000-0002-1825-0097/work/1"><x:person><x:name><x:given-names>No</x:given-names></x:name></x:person><x:history><x:claimed>true</x:claimed></x:history><x:record><x:person/></x:record><x:error><x:response-code>400</x:response-code></x:error><x:notification/><x:record-summary/><x:search><x:result/></x:search><x:group-id-record put-code="2"/></work:work>' AS x);
+----
+0	0	0	0	0	0	0	1

@@ -1,0 +1,301 @@
+# name: test/sql/orcid_sections.test
+# description: every section table over the ORCID v3.0 sample documents (reference/orcid-model)
+# group: [orcid]
+
+require yorc
+
+# ---------------------------------------------------------------- full record
+
+query IIIIIIIIIII
+SELECT (SELECT count(*) FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_fundings('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_contributors('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_person('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')),
+       (SELECT count(*) FROM orcid_history('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml'));
+----
+1	1	7	1	1	0	0	16	1	6	1
+
+query I
+SELECT string_agg(affiliation_type, ',' ORDER BY affiliation_type)
+FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml');
+----
+distinction,education,employment,invited-position,membership,qualification,service
+
+query I
+SELECT count(DISTINCT orcid) FILTER (WHERE orcid = '8888-8888-8888-8880')
+FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml');
+----
+1
+
+query IIIII
+SELECT given_names, family_name, credit_name, biography, name_visibility
+FROM orcid_person('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml');
+----
+give-names	family-name	credit-name	biography	public
+
+query I
+SELECT string_agg(kind || '=' || value, ',' ORDER BY kind)
+FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml');
+----
+address=US,email=user1@email.com,external-identifier=value-1,keyword=keyword1,other-name=other-name-1,researcher-url=url-name-1
+
+query II
+SELECT url, type FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml') WHERE kind = 'external-identifier';
+----
+http://url.com/1	type-1
+
+# ---------------------------------------------------------------- full work
+
+query IIIIIIIIIIII
+SELECT item, put_code, orcid, group_index, translated_title, translated_title_language,
+       citation_type, citation_value, language_code, country, doi, pub_month
+FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml');
+----
+work	123	NULL	NULL	common:translated-title	en	formatted-unspecified	work:citation	en	AF	work:doi	2
+
+query IIIIIIII
+SELECT owner, owner_put_code, ordinal, contributor_orcid, credit_name, email, sequence, role
+FROM orcid_contributors('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml');
+----
+work	123	1	8888-8888-8888-8880	work:credit-name	work@contributor.email	first	author
+
+query IIIII
+SELECT owner, container, type, value, relationship
+FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml') ORDER BY type;
+----
+work	external-ids	agr	work:external-identifier-id	version-of
+work	external-ids	doi	work:doi	self
+
+# ---------------------------------------------------------------- research resource
+
+query IIIIIII
+SELECT orcid, title, translated_title_language, host_name, start_year, end_year, url
+FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/read_samples/research-resource-3.0.xml');
+----
+0000-0003-0902-4386	Giant Laser Award	de	XSEDE	1999	2012	http://xsede.org/GiantLaserAward
+
+query IIIIII
+SELECT owner_put_code, ordinal, resource_name, resource_type, host_name, url
+FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/read_samples/research-resource-3.0.xml') ORDER BY ordinal;
+----
+1234	1	Giant Laser 1	infrastructures	Lasers-R-US	http://blah.com
+1234	2	Moon Targets	infrastructures	Moon Holdings Ltd	http://blah2.com
+
+query I
+SELECT count(*) FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/read_samples/research-resource-3.0.xml');
+----
+5
+
+# ---------------------------------------------------------------- every research-resource host (CROSSCHECK #9)
+# research-resource-3.0.xml: two proposal hosts
+# (lines 24-49: XSEDE grid, Lasers-R-Us lei) and one host per resource item
+# (lines 82-95: Lasers-R-US grid; 114-127: Moon Holdings Ltd lei); every one
+# in city / region / US with id XX. The first-host columns above keep XSEDE
+# and Lasers-R-US.
+
+query IIIIIIIIIII
+SELECT orcid, owner_put_code, ordinal, host_name, host_city, host_region, host_country,
+       host_disambiguated_id, host_disambiguation_source, container, item_ordinal
+FROM orcid_research_resource_hosts('reference/orcid-model/record_3.0/samples/read_samples/research-resource-3.0.xml');
+----
+0000-0003-0902-4386	1234	1	XSEDE	city	region	US	XX	grid	proposal	NULL
+0000-0003-0902-4386	1234	2	Lasers-R-Us	city	region	US	XX	lei	proposal	NULL
+0000-0003-0902-4386	1234	1	Lasers-R-US	city	region	US	XX	grid	resource-item	1
+0000-0003-0902-4386	1234	1	Moon Holdings Ltd	city	region	US	XX	lei	resource-item	2
+
+# research-resources-3.0.xml: summary 1234 has two hosts (lines 41-68), 1235
+# one (lines 116-130); the iD is the root path's; "XX" followed by a newline is trimmed
+
+query IIIIII
+SELECT orcid, owner_put_code, ordinal, host_name, host_disambiguated_id, container
+FROM orcid_research_resource_hosts('reference/orcid-model/record_3.0/samples/read_samples/research-resources-3.0.xml');
+----
+8888-8888-8888-8880	1234	1	XSEDE	XX	proposal
+8888-8888-8888-8880	1234	2	Lasers-R-Us	XX	proposal
+8888-8888-8888-8880	1235	1	XSEDE	XX	proposal
+
+# the hosts of an item join its research_resource_items row by (owner_put_code, ordinal)
+query II
+SELECT i.resource_name, h.host_name
+FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/read_samples/research-resource-3.0.xml') i
+JOIN orcid_research_resource_hosts('reference/orcid-model/record_3.0/samples/read_samples/research-resource-3.0.xml') h
+  ON h.container = 'resource-item' AND h.owner_put_code = i.owner_put_code AND h.item_ordinal = i.ordinal
+ORDER BY i.ordinal, h.ordinal;
+----
+Giant Laser 1	Lasers-R-US
+Moon Targets	Moon Holdings Ltd
+
+# record-3.0.xml: the research-resource-summary's one host (lines 639-652)
+query IIII
+SELECT orcid, owner_put_code, host_name, container
+FROM orcid_research_resource_hosts('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml');
+----
+8888-8888-8888-8880	1234	XSEDE	proposal
+
+# ---------------------------------------------------------------- context columns (CROSSCHECK #10)
+
+# record-3.0.xml lines 20-24: the record's orcid-identifier
+query II
+SELECT orcid_uri, orcid_host FROM orcid_person('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml');
+----
+https://orcid.org/8888-8888-8888-8880	orcid.org
+
+# a standalone person document has no orcid-identifier
+query II
+SELECT orcid_uri, orcid_host FROM orcid_person('reference/orcid-model/record_3.0/samples/read_samples/person-3.0.xml');
+----
+NULL	NULL
+
+# work-full-3.0.xml line 53: <common:host>orcid.org</common:host>
+query II
+SELECT contributor_orcid, contributor_orcid_host
+FROM orcid_contributors('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml');
+----
+8888-8888-8888-8880	orcid.org
+
+# no sample in XML carries an assertion origin (grep -c assertion-origin: 0);
+# the JSON record does (orcid_json.test)
+query III
+SELECT count(assertion_origin_name), count(assertion_origin_orcid), count(assertion_origin_client_id)
+FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml');
+----
+0	0	0
+
+# The widths after #9 and #10, in section order (yorc-rs's
+# schema_matches_yorc_duckdb has the same numbers for the 14 sections it shares)
+query IIIIIIIIIIIIIIIIIII
+SELECT (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_works_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_fundings_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_affiliations_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_peer_reviews_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_research_resources_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_research_resource_items_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_contributors_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_external_ids_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_person_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_person_items_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_history_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_timeline_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_summary_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_summary_items_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_search_results_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_errors_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_notifications_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_group_ids_xml(NULL))),
+       (SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_research_resource_hosts_xml(NULL)));
+----
+32	37	32	38	32	13	12	13	15	24	17	13	23	20	13	10	30	12	12
+
+# the new columns are appended: the earlier positions do not move
+query I
+SELECT string_agg(column_name, ',') FROM (DESCRIBE SELECT * FROM orcid_research_resource_hosts_xml(NULL));
+----
+orcid,owner_put_code,ordinal,host_name,host_city,host_region,host_country,host_disambiguated_id,host_disambiguation_source,container,item_ordinal,source_hash
+
+query IIIIIIII
+SELECT (SELECT string_agg(column_name, ',') FROM (SELECT column_name FROM (DESCRIBE SELECT * FROM orcid_fundings_xml(NULL)) OFFSET 34)),
+       (SELECT string_agg(column_name, ',') FROM (SELECT column_name FROM (DESCRIBE SELECT * FROM orcid_affiliations_xml(NULL)) OFFSET 28)),
+       (SELECT string_agg(column_name, ',') FROM (SELECT column_name FROM (DESCRIBE SELECT * FROM orcid_peer_reviews_xml(NULL)) OFFSET 34)),
+       (SELECT string_agg(column_name, ',') FROM (SELECT column_name FROM (DESCRIBE SELECT * FROM orcid_research_resources_xml(NULL)) OFFSET 28)),
+       (SELECT string_agg(column_name, ',') FROM (SELECT column_name FROM (DESCRIBE SELECT * FROM orcid_contributors_xml(NULL)) OFFSET 10)),
+       (SELECT string_agg(column_name, ',') FROM (SELECT column_name FROM (DESCRIBE SELECT * FROM orcid_external_ids_xml(NULL)) OFFSET 11)),
+       (SELECT string_agg(column_name, ',') FROM (SELECT column_name FROM (DESCRIBE SELECT * FROM orcid_person_xml(NULL)) OFFSET 12)),
+       (SELECT string_agg(column_name, ',') FROM (SELECT column_name FROM (DESCRIBE SELECT * FROM orcid_history_xml(NULL)) OFFSET 13));
+----
+source_hash,assertion_origin_orcid,assertion_origin_client_id	item,source_hash,assertion_origin_orcid,assertion_origin_client_id	source_hash,subject_translated_name_language,assertion_origin_orcid,assertion_origin_client_id	item,source_hash,assertion_origin_orcid,assertion_origin_client_id	source_hash,contributor_orcid_host	source_hash,normalized_error_code	source_hash,orcid_uri,orcid_host	source_hash,assertion_origin_name,assertion_origin_orcid,assertion_origin_client_id
+
+query I
+SELECT string_agg(column_name, ',') FROM (SELECT column_name FROM (DESCRIBE SELECT * FROM orcid_person_items_xml(NULL)) OFFSET 17);
+----
+source_hash,assertion_origin_name,assertion_origin_orcid,assertion_origin_client_id,normalized,normalized_error,normalized_error_code
+
+# ---------------------------------------------------------------- peer review
+
+query IIIIII
+SELECT put_code, completion_year, review_group_id, subject_translated_name, subject_id_type,
+       convening_org_disambiguation_source
+FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/read_samples/peer-review-full-3.0.xml');
+----
+12345	1948	orcid-generated:12345	peer-review:subject-translated-name	doi	FUNDREF
+
+query II
+SELECT container, type FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/read_samples/peer-review-full-3.0.xml') ORDER BY container DESC;
+----
+review-identifiers	source-work-id
+peer-review	doi
+
+# ---------------------------------------------------------------- collections and single documents
+
+query I
+SELECT count(*) FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/works-3.0.xml');
+----
+3
+
+query II
+SELECT count(*), max(group_index) FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/employments-3.0.xml');
+----
+2	2
+
+query I
+SELECT count(*) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/person-3.0.xml');
+----
+6
+
+query I
+SELECT count(*) FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/bulk-work-err.xml');
+----
+1
+
+query IIII
+SELECT creation_method, claimed, verified_email, visibility FROM orcid_history('reference/orcid-model/record_3.0/samples/read_samples/history-3.0.xml');
+----
+API	true	true	private
+
+# ---------------------------------------------------------------- _xml variants share the schema
+
+query I
+SELECT count(*) FROM orcid_affiliations_xml(NULL);
+----
+0
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_person_items_xml(NULL));
+----
+24
+
+query I
+SELECT count(*) FROM read_text('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml') t, orcid_external_ids_xml(t.content) e;
+----
+16
+
+# ---------------------------------------------------------------- your record
+
+query IIII
+SELECT (SELECT count(*) FROM orcid_works('test/data/0000-0003-0100-6634.xml')),
+       (SELECT count(*) FROM orcid_person('test/data/0000-0003-0100-6634.xml')),
+       (SELECT count(*) FROM orcid_history('test/data/0000-0003-0100-6634.xml')),
+       (SELECT count(*) > 0 FROM orcid_external_ids('test/data/0000-0003-0100-6634.xml'));
+----
+382	1	1	true
+
+# ---------------------------------------------------------------- the pre-3.0 peer-review layout (FINDINGS #3)
+# read sample peer-reviews-3.0.xml nests its review in activities:group/peer-review:summary,
+# a layout the v3.0 XSDs do not have. As in yorc-rs, yorc-zig and ORCID's classes, nothing
+# inside it is read: the group's external id (orcid-generated:011484675699116) stays, and the
+# summary's two (agr, doi) are not rows.
+
+query II
+SELECT count(*), string_agg(value, ',') FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/read_samples/peer-reviews-3.0.xml');
+----
+1	orcid-generated:011484675699116
+
+query I
+SELECT count(*) FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/read_samples/peer-reviews-3.0.xml');
+----
+0

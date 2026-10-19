@@ -1,0 +1,335 @@
+# name: test/sql/orcid_walkthrough.test
+# description: docs/WALKTHROUGH.md and docs/walkthrough.sql: the walkthrough's cells stay in step with each other, and each cell's queries give the expected outputs of the page
+# group: [orcid]
+#
+# On a failure, check the fixture by hand and then fix the page, the .sql file
+# and this test together.
+#
+# The queries are the cells' queries, verbatim, with three differences:
+# - the shell's dot commands (.print, .mode, .pager, .headers) are left out,
+#   and LOAD yorc is `require orcid`;
+# - the output file of cell 5 goes to __TEST_DIR__ instead of the current directory,
+#   and printed documents and CSV lines are compared with newlines shown as \n;
+# - where a cell's result is not derivable without running DuckDB (the
+#   DuckDB version in cell 0),
+#   the query runs as `statement ok` or is narrowed to the derivable columns.
+# The expected values, and how each was derived (grep, tar, python3 -I over
+# the input files), are in the HTML comment beside each "Expected output"
+# block of docs/WALKTHROUGH.md.
+
+require yorc
+
+# ---------------------------------------------------------------- the page and the file are in step
+# every SQL block marked <!-- cell N --> in WALKTHROUGH.md appears verbatim in
+# walkthrough.sql, and the file prints exactly the 10 cell headings
+
+query II
+WITH md AS (
+  SELECT unnest(regexp_extract_all(content, '(?s)<!-- cell [0-9]+ -->\n```sql\n(.*?)```', 1)) AS block
+  FROM read_text('docs/WALKTHROUGH.md')),
+     sq AS (SELECT content FROM read_text('docs/walkthrough.sql'))
+SELECT count(*), count(*) FILTER (WHERE NOT contains(sq.content, md.block))
+FROM md, sq;
+----
+10	0
+
+query I
+SELECT len(regexp_extract_all(content, '\.print "Cell [0-9]+\. '))
+FROM read_text('docs/walkthrough.sql');
+----
+10
+
+# ---------------------------------------------------------------- cell 0. setup
+# version() is the running DuckDB's (v1.5.6 on the page), so it is not pinned
+
+query II
+SELECT extension_name, loaded
+FROM (SELECT version() AS duckdb, extension_name, loaded
+      FROM duckdb_extensions()
+      WHERE extension_name = 'yorc');
+----
+yorc	true
+
+query II
+SELECT filename, size
+FROM read_blob(['test/data/demo/0000-0002-2771-9344.xml',
+                'reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml',
+                'reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml',
+                'reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml',
+                'reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json',
+                'test/data/dump/orcid_test_summaries.tar.gz'])
+ORDER BY filename;
+----
+reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml	36958
+reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml	2922
+reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json	2358
+reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml	2500
+test/data/demo/0000-0002-2771-9344.xml	45543
+test/data/dump/orcid_test_summaries.tar.gz	64616
+
+# ---------------------------------------------------------------- cell 1. iDs (the Rust walkthrough's four inputs; the fourth has a space at each end)
+
+query IIII
+SELECT input, orcid_valid(input) AS valid, orcid_normalize(input) AS normalized,
+       'https://orcid.org/' || orcid_normalize(input) AS uri
+FROM (VALUES (1, '0000-0002-1825-0097'),
+             (2, '0000-0002-1825-0098'),
+             (3, 'https://orcid.org/000000021694233x'),
+             (4, ' 0000 0002 2771 9344 ')) AS t(n, input)
+ORDER BY n;
+----
+0000-0002-1825-0097	true	0000-0002-1825-0097	https://orcid.org/0000-0002-1825-0097
+0000-0002-1825-0098	false	NULL	NULL
+https://orcid.org/000000021694233x	true	0000-0002-1694-233X	https://orcid.org/0000-0002-1694-233X
+ 0000 0002 2771 9344 	true	0000-0002-2771-9344	https://orcid.org/0000-0002-2771-9344
+
+# ---------------------------------------------------------------- cell 2. summary
+
+query IIIIIIII
+SELECT p.orcid, p.given_names, p.family_name, p.credit_name,
+       (SELECT count(*) FROM orcid_works('test/data/demo/0000-0002-2771-9344.xml'))        AS works,
+       (SELECT count(*) FROM orcid_fundings('test/data/demo/0000-0002-2771-9344.xml'))     AS fundings,
+       (SELECT count(*) FROM orcid_affiliations('test/data/demo/0000-0002-2771-9344.xml')) AS affiliations,
+       (SELECT count(*) FROM orcid_peer_reviews('test/data/demo/0000-0002-2771-9344.xml')) AS peer_reviews
+FROM orcid_person('test/data/demo/0000-0002-2771-9344.xml') p;
+----
+0000-0002-2771-9344	Sofia	Hernandez	Sofia Maria Garcia Hernandez	12	0	0	0
+
+# ---------------------------------------------------------------- cell 3. newest works
+
+query IIIII
+SELECT put_code, pub_year, type, doi, title
+FROM orcid_works('test/data/demo/0000-0002-2771-9344.xml')
+ORDER BY pub_year DESC NULLS LAST, pub_month DESC NULLS LAST, pub_day DESC NULLS LAST, put_code
+LIMIT 10;
+----
+224052943	2026	data-set	10.25592/uhhfdm.19102	Point cloud calorimeter shower datasets for multi-geometry pre-training: SimpleBox and LEMURS
+224052944	2026	data-set	10.25592/uhhfdm.19103	Point cloud calorimeter shower datasets for multi-geometry pre-training: SimpleBox and LEMURS
+224052945	2026	data-set	10.25592/uhhfdm.19102	Point cloud calorimeter shower datasets for multi-geometry pre-training: SimpleBox and LEMURS
+37069489	2017	other	10.5281/zenodo.495149	Introducing Orcid
+43318438	2017	other	10.6084/m9.figshare.5479792.v1	ORCID Public Data File 2017
+37069490	2016	other	10.5281/zenodo.168190	Introducing Orcid: What, Why And How
+37069241	2016	data-set	10.6084/m9.figshare.4134027.v1	ORCID Public Data File 2016
+37069473	2016	journal-article	10.1002/chemv.201600091	Your Lifelong Digital Name
+37069249	2015	data-set	10.6084/m9.figshare.1582705	ORCID Public Data File 2015
+37069240	2014	data-set	10.14454/07243.2014.001	ORCID Annual Public Data File, 2014
+
+# ---------------------------------------------------------------- cell 4. JSON, XML -> JSON -> XML (crosswalk)
+
+query IIII
+SELECT title, type, make_date(pub_year, pub_month, pub_day) AS published,
+       (SELECT count(*) FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json')) AS external_ids
+FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json');
+----
+Work Title	journal-article	2022-05-24	2
+
+query II
+SELECT credit_name, contributor_orcid
+FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json')
+ORDER BY ordinal;
+----
+Jordan	0000-0002-5391-5437
+Fran	0000-0002-4325-871X
+
+statement ok
+CREATE OR REPLACE TEMP TABLE rec_xml AS
+SELECT struct_insert(w,
+         external_ids := (SELECT list(e) FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml') e),
+         contributors := (SELECT list(c ORDER BY c.ordinal) FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml') c)) AS rec
+FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml') w;
+
+statement ok
+CREATE OR REPLACE TEMP TABLE as_json AS
+SELECT orcid_work_to_json(rec, true) AS doc FROM rec_xml;
+
+statement ok
+CREATE OR REPLACE TEMP TABLE rec_json AS
+SELECT struct_insert(w,
+         external_ids := (SELECT list(e) FROM orcid_external_ids_json((SELECT doc FROM as_json)) e),
+         contributors := (SELECT list(c ORDER BY c.ordinal) FROM orcid_contributors_json((SELECT doc FROM as_json)) c)) AS rec
+FROM orcid_works_json((SELECT doc FROM as_json)) w;
+
+query I
+SELECT array_to_string(regexp_extract_all(doc, '(?m)^  "([a-z-]+)":', 1), ', ') AS json_keys
+FROM as_json;
+----
+citation, contributors, country, external-ids, journal-title, language-code, publication-date, short-description, title, type, url
+
+query II
+SELECT (SELECT count(*)
+        FROM (SELECT * EXCLUDE (source_hash) FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml')
+              EXCEPT
+              SELECT * EXCLUDE (source_hash) FROM orcid_works_json((SELECT doc FROM as_json)))) = 0 AS same_rows,
+       (SELECT orcid_work_to_xml(rec, true) FROM rec_json) = (SELECT orcid_work_to_xml(rec, true) FROM rec_xml) AS same_xml;
+----
+true	true
+
+# not in the walkthrough: the crosswalk JSON is the expected file orcid_crosswalk.test pins for this sample
+query I
+SELECT doc = (SELECT content FROM read_text('test/data/crosswalk/write_samples/work-full-3.0.json')) FROM as_json;
+----
+true
+
+# ---------------------------------------------------------------- cell 5. section tables, CSV
+
+statement ok
+CREATE OR REPLACE TABLE works                   AS SELECT * FROM orcid_works('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE fundings                AS SELECT * FROM orcid_fundings('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE affiliations            AS SELECT * FROM orcid_affiliations('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE peer_reviews            AS SELECT * FROM orcid_peer_reviews('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE research_resources      AS SELECT * FROM orcid_research_resources('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE research_resource_items AS SELECT * FROM orcid_research_resource_items('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE contributors            AS SELECT * FROM orcid_contributors('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE external_ids            AS SELECT * FROM orcid_external_ids('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE person                  AS SELECT * FROM orcid_person('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE person_items            AS SELECT * FROM orcid_person_items('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE history                 AS SELECT * FROM orcid_history('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE search_results          AS SELECT * FROM orcid_search_results('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE errors                  AS SELECT * FROM orcid_errors('test/data/demo/0000-0002-2771-9344.xml');
+
+statement ok
+CREATE OR REPLACE TABLE research_resource_hosts AS SELECT * FROM orcid_research_resource_hosts('test/data/demo/0000-0002-2771-9344.xml');
+
+query III
+WITH cols AS (SELECT table_name, count(*) AS column_count
+              FROM duckdb_columns()
+              WHERE schema_name = 'main' AND database_name = current_database()
+              GROUP BY table_name)
+SELECT r.section_table, r.row_count, cols.column_count
+FROM (SELECT 1 AS n, 'works' AS section_table, count(*) AS row_count FROM works
+      UNION ALL SELECT 2, 'fundings', count(*) FROM fundings
+      UNION ALL SELECT 3, 'affiliations', count(*) FROM affiliations
+      UNION ALL SELECT 4, 'peer_reviews', count(*) FROM peer_reviews
+      UNION ALL SELECT 5, 'research_resources', count(*) FROM research_resources
+      UNION ALL SELECT 6, 'research_resource_items', count(*) FROM research_resource_items
+      UNION ALL SELECT 7, 'contributors', count(*) FROM contributors
+      UNION ALL SELECT 8, 'external_ids', count(*) FROM external_ids
+      UNION ALL SELECT 9, 'person', count(*) FROM person
+      UNION ALL SELECT 10, 'person_items', count(*) FROM person_items
+      UNION ALL SELECT 11, 'history', count(*) FROM history
+      UNION ALL SELECT 12, 'search_results', count(*) FROM search_results
+      UNION ALL SELECT 13, 'errors', count(*) FROM errors
+      UNION ALL SELECT 14, 'research_resource_hosts', count(*) FROM research_resource_hosts) r
+JOIN cols ON cols.table_name = r.section_table
+ORDER BY r.n;
+----
+works	12	32
+fundings	0	37
+affiliations	0	32
+peer_reviews	0	38
+research_resources	0	32
+research_resource_items	0	13
+contributors	0	12
+external_ids	26	13
+person	1	15
+person_items	4	24
+history	1	17
+search_results	0	13
+errors	0	10
+research_resource_hosts	0	12
+
+statement ok
+COPY works TO '__TEST_DIR__/walkthrough_works.csv' (HEADER, DELIMITER ',');
+
+# the page prints these three lines with .mode list; newlines shown as \n here
+query I
+SELECT replace(x, chr(10), '\n')
+FROM (SELECT array_to_string(string_split(content, chr(10))[1:3], chr(10)) FROM read_text('__TEST_DIR__/walkthrough_works.csv')) t(x);
+----
+orcid,put_code,group_index,display_index,title,subtitle,journal,type,pub_year,pub_month,pub_day,doi,url,source_name,visibility,created,last_modified,source_hash,translated_title,translated_title_language,short_description,citation_type,citation_value,language_code,country,path,source_client_id,source_orcid,assertion_origin_name,assertion_origin_orcid,assertion_origin_client_id,item\n0000-0002-2771-9344,224052945,1,1,Point cloud calorimeter shower datasets for multi-geometry pre-training: SimpleBox and LEMURS,,Universität Hamburg,data-set,2026,8,17,10.25592/uhhfdm.19102,,DataCite,public,2026-08-17T12:42:27.716Z,2026-08-17T12:42:27.716Z,59018b6d315be538bb84a6105ff3ac1c4c274f3b467a455eb2576e03bbc2f86e,,,,,,,,/0000-0002-2771-9344/work/224052945,0000-0001-8099-6984,,,,,work-summary\n0000-0002-2771-9344,224052944,1,1,Point cloud calorimeter shower datasets for multi-geometry pre-training: SimpleBox and LEMURS,,Universität Hamburg,data-set,2026,8,17,10.25592/uhhfdm.19103,,DataCite,public,2026-08-17T12:42:27.716Z,2026-08-17T12:42:27.716Z,59018b6d315be538bb84a6105ff3ac1c4c274f3b467a455eb2576e03bbc2f86e,,,,,,,,/0000-0002-2771-9344/work/224052944,0000-0001-8099-6984,,,,,work-summary
+
+# ---------------------------------------------------------------- cell 6. contributors, co-authors
+# the two work-full XML samples only (as the Rust and Zig walkthroughs)
+
+query IIII
+SELECT credit_name, contributor_orcid, sequence, role
+FROM (SELECT 'read' AS sample, *
+      FROM orcid_contributors('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml')
+      UNION ALL
+      SELECT 'write', *
+      FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml'))
+ORDER BY sample, ordinal;
+----
+work:credit-name	8888-8888-8888-8880	first	author
+Laure L. Haak	0000-0001-5109-3700	first	author
+
+query I
+SELECT count(DISTINCT contributor_orcid) AS coauthors
+FROM (SELECT * FROM orcid_contributors('reference/orcid-model/record_3.0/samples/read_samples/work-full-3.0.xml')
+      UNION ALL
+      SELECT * FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml'));
+----
+2
+
+# ---------------------------------------------------------------- cell 7. affiliation timeline
+
+query IIIIII
+SELECT start_year, end_year, affiliation_type AS type, org_name,
+       org_disambiguation_source AS id_source, org_disambiguated_id AS org_id
+FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-3.0.xml')
+WHERE affiliation_type IN ('employment', 'education')
+ORDER BY start_year NULLS LAST, start_month NULLS LAST, start_day NULLS LAST, affiliation_type, put_code;
+----
+1948	2019	education	education-org	GRID	common:disambiguated-organization-identifier-education
+1948	2025	employment	employment-org	GRID	common:disambiguated-organization-identifier-employment
+
+# ---------------------------------------------------------------- cell 8. the dump fixture
+
+query IIII
+SELECT name, orcid, regexp_extract(xml, '<([A-Za-z-]+:[A-Za-z-]+)', 1) AS root, strlen(xml) AS bytes
+FROM orcid_documents('test/data/dump/orcid_test_summaries.tar.gz');
+----
+0000-0003-0100-6634.xml	0000-0003-0100-6634	record:record	1324198
+8888-8888-8888-8880.xml	8888-8888-8888-8880	record:record	36958
+and-a-file-name-too-0000-0000-0000-0000.xml	NULL	activities:works	6672
+
+# the counts the Rust and Zig walkthroughs print: XML members 3; records 2; named by a valid iD 2
+query III
+SELECT count(*) AS xml_members,
+       count(*) FILTER (WHERE regexp_extract(xml, '<([A-Za-z-]+:[A-Za-z-]+)', 1) = 'record:record') AS records,
+       count(orcid) AS named_by_valid_id
+FROM orcid_documents('test/data/dump/orcid_test_summaries.tar.gz');
+----
+3	2	2
+
+query I
+SELECT string_agg(orcid, ', ' ORDER BY orcid) AS record_ids
+FROM orcid_person('test/data/dump/orcid_test_summaries.tar.gz');
+----
+0000-0003-0100-6634, 8888-8888-8888-8880
+
+# the picks of the Rust and Zig walkthroughs (the same sampler: orcid_dump_sample.test)
+query III
+SELECT 42 AS seed, orcid, eligible FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 1, 42)
+UNION ALL
+SELECT 7, orcid, eligible FROM orcid_dump_sample('test/data/dump/orcid_test_summaries.tar.gz', 1, 7)
+ORDER BY seed DESC;
+----
+42	0000-0003-0100-6634	2
+7	8888-8888-8888-8880	2
+
+# ---------------------------------------------------------------- cell 9. manual (network): not run

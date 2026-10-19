@@ -1,0 +1,61 @@
+{
+  "department-name": "department-name",
+  "end-date": {
+    "day": {
+      "value": "02"
+    },
+    "month": {
+      "value": "02"
+    },
+    "year": {
+      "value": "1948"
+    }
+  },
+  "external-ids": {
+    "external-id": [
+      {
+        "external-id-relationship": "self",
+        "external-id-type": "grant_number",
+        "external-id-url": {
+          "value": "http://tempuri.org"
+        },
+        "external-id-value": "external-identifier-value"
+      },
+      {
+        "external-id-relationship": "self",
+        "external-id-type": "grant_number",
+        "external-id-url": {
+          "value": "http://tempuri.org/2"
+        },
+        "external-id-value": "external-identifier-value2"
+      }
+    ]
+  },
+  "organization": {
+    "address": {
+      "city": "common:city",
+      "country": "AF",
+      "region": "common:region"
+    },
+    "disambiguated-organization": {
+      "disambiguated-organization-identifier": "https://ror.org/021nxhr62",
+      "disambiguation-source": "ROR"
+    },
+    "name": "common:name"
+  },
+  "role-title": "role-title",
+  "start-date": {
+    "day": {
+      "value": "02"
+    },
+    "month": {
+      "value": "02"
+    },
+    "year": {
+      "value": "1948"
+    }
+  },
+  "url": {
+    "value": "http://tempuri.org"
+  }
+}

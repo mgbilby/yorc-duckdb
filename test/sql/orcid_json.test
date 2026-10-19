@@ -1,0 +1,846 @@
+# name: test/sql/orcid_json.test
+# description: ORCID v3.0 JSON reads into the same rows as the XML: the JSON/XML sample pairs of reference/orcid-model, the record JSON sample, format detection in files, globs and archives, the _json twins and orcid_changes_json
+# group: [orcid]
+#
+# Expected values come from the sample files: the JSON with python3 -I (json
+# module) and by reading, the XML by grep. Paths below:
+#   W = reference/orcid-model/record_3.0/samples/write_samples/
+#   R = reference/orcid-model/record_3.0/samples/read_samples/
+#
+# Of the 20 JSON/XML write-sample pairs only two carry the same values
+# (external-identifier-3.0, other-name-3.0 / other-names-3.0); they must give
+# identical rows (EXCEPT both ways, source_hash aside: it hashes each file).
+# The other pairs describe different items with the same structure, so for
+# them the rows must have the same NULL pattern (COLUMNS(*) IS NULL, EXCEPT
+# both ways), minus the columns one file of the pair fills and the other does
+# not (listed per pair, found by comparing the element paths of the two
+# files), and the JSON values are checked against the JSON file.
+
+require yorc
+
+# ---------------------------------------------------------------- the two identical pairs
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/external-identifier-3.0.json')
+   EXCEPT
+   SELECT * EXCLUDE (source_hash) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/external-identifier-3.0.xml'))
+  UNION ALL
+  (SELECT * EXCLUDE (source_hash) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/external-identifier-3.0.xml')
+   EXCEPT
+   SELECT * EXCLUDE (source_hash) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/external-identifier-3.0.json')));
+----
+0
+
+# both files: My ID System / A-0003 / https://myid.com/A-0003 / self
+query IIIII
+SELECT kind, type, value, url, relationship
+FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/external-identifier-3.0.json');
+----
+external-identifier	My ID System	A-0003	https://myid.com/A-0003	self
+
+# {"content": ...} is an other name or a keyword: ORCID's JSON does not say which
+statement error
+SELECT * FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/other-names-3.0.json');
+----
+json_root
+
+query I
+SELECT count(*) FROM (
+  (SELECT * EXCLUDE (source_hash) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/other-names-3.0.json', json_root := 'other-name')
+   EXCEPT
+   SELECT * EXCLUDE (source_hash) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/other-name-3.0.xml'))
+  UNION ALL
+  (SELECT * EXCLUDE (source_hash) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/other-name-3.0.xml')
+   EXCEPT
+   SELECT * EXCLUDE (source_hash) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/other-names-3.0.json', json_root := 'other-name')));
+----
+0
+
+query II
+SELECT kind, value
+FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/other-names-3.0.json', json_root := 'other-name');
+----
+other-name	Other Name
+
+# ---------------------------------------------------------------- person items (same NULL pattern; JSON values)
+
+query I
+SELECT count(*) FROM (
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/address-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/address-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/address-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/address-3.0.json')));
+----
+0
+
+# address-3.0.json {"country": {"value": "CA"}}; address-3.0.xml <address:country>US
+query II
+SELECT (SELECT kind || '=' || value FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/address-3.0.json')),
+       (SELECT kind || '=' || value FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/address-3.0.xml'));
+----
+address=CA	address=US
+
+query I
+SELECT count(*) FROM (
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/keywords-3.0.json', json_root := 'keyword')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/keyword-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/keyword-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/keywords-3.0.json', json_root := 'keyword')));
+----
+0
+
+# keywords-3.0.json {"content": "keyword"}
+query II
+SELECT kind, value FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/keywords-3.0.json', json_root := 'keyword');
+----
+keyword	keyword
+
+query I
+SELECT count(*) FROM (
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-3.0.json'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-no-name-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-3.0-no-name.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-3.0-no-name.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-no-name-3.0.json')));
+----
+0
+
+# researcher-url-3.0.json: url-name "Url name", url {"value": "https://example.com"}; the no-name file has the url only
+query IIII
+SELECT a.kind, a.value, a.url, b.value IS NULL AND b.url = a.url
+FROM orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-3.0.json') a,
+     orcid_person_items('reference/orcid-model/record_3.0/samples/write_samples/researcher-url-no-name-3.0.json') b;
+----
+researcher-url	Url name	https://example.com	true
+
+# ---------------------------------------------------------------- the seven affiliation types
+# The JSON carries no type (the API takes it from the URL), so json_root names it.
+
+statement error
+SELECT * FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/employment-3.0.json');
+----
+pass json_root := 'employment'
+
+foreach type distinction education employment invited-position membership qualification service
+
+query I
+SELECT count(*) FROM (
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/${type}-3.0.json', json_root := '${type}')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/${type}-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/${type}-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/${type}-3.0.json', json_root := '${type}')));
+----
+0
+
+query I
+SELECT count(*) FROM (
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/${type}-3.0.json', json_root := '${type}')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/${type}-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/${type}-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/${type}-3.0.json', json_root := '${type}')));
+----
+0
+
+# sqllogictest does not substitute loop variables in expected results
+query I
+SELECT affiliation_type = '${type}' FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/${type}-3.0.json', json_root := '${type}');
+----
+true
+
+endloop
+
+# employment-3.0.json values; 3 external ids (2 grant_number self, 1 doi part-of)
+query IIIIIIIIII
+SELECT department, role_title, start_year, start_month, end_year, org_name, org_city, org_country,
+       org_disambiguated_id, url
+FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/employment-3.0.json', json_root := 'employment');
+----
+Primary Care Health Services	Role	2021	1	2023	Boston University	Boston	US	https://ror.org/05qwgg493	https://example.com
+
+query III
+SELECT count(*), count(*) FILTER (WHERE relationship = 'self'), string_agg(DISTINCT type, ',' ORDER BY type)
+FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/employment-3.0.json', json_root := 'employment');
+----
+3	2	doi,grant_number
+
+# service-3.0.json: start 1948, end 2015, ORCID Inc
+query III
+SELECT start_year, end_year, org_name
+FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/write_samples/service-3.0.json', json_root := 'service');
+----
+1948	2015	ORCID Inc
+
+# ---------------------------------------------------------------- funding
+# funding-3.0-simple.json fills organization/address/region, funding-3.0.xml does not
+
+query I
+SELECT count(*) FROM (
+  (SELECT COLUMNS(* EXCLUDE (source_hash, org_region)) IS NULL FROM orcid_fundings('reference/orcid-model/record_3.0/samples/write_samples/funding-3.0-simple.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, org_region)) IS NULL FROM orcid_fundings('reference/orcid-model/record_3.0/samples/write_samples/funding-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash, org_region)) IS NULL FROM orcid_fundings('reference/orcid-model/record_3.0/samples/write_samples/funding-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, org_region)) IS NULL FROM orcid_fundings('reference/orcid-model/record_3.0/samples/write_samples/funding-3.0-simple.json')));
+----
+0
+
+query IIIIIIIIII
+SELECT type, organization_defined_type, title, translated_title, translated_title_language, amount, currency,
+       start_year, org_name, org_disambiguation_source
+FROM orcid_fundings('reference/orcid-model/record_3.0/samples/write_samples/funding-3.0-simple.json');
+----
+grant	Funding sub-type	Grant title	Translated title	en	1000.0	ADP	2000	ORCID	ROR
+
+query II
+SELECT count(*), string_agg(value, ',' ORDER BY value)
+FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/funding-3.0-simple.json');
+----
+3	1234567,987654321,PTDC/NEU
+
+# funding-3.0-with-NISO-roles.json (no XML twin): 18 contributors, every
+# "contributor-email" null (python3 -I); no put-code, so no owner either
+query III
+SELECT count(*), count(email), count(owner)
+FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/funding-3.0-with-NISO-roles.json');
+----
+18	0	0
+
+query II
+SELECT credit_name, role FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/funding-3.0-with-NISO-roles.json') WHERE ordinal <= 2 ORDER BY ordinal;
+----
+Jordan Holt	lead
+Fran Alsina	co-lead
+
+# ---------------------------------------------------------------- peer reviews
+# the full JSON samples fill subject-name/subtitle, their XML twins do not;
+# peer-review-simple-3.0.json fills review-url, its XML twin does not
+
+query I
+SELECT count(*) FROM (
+  (SELECT COLUMNS(* EXCLUDE (source_hash, subject_subtitle)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, subject_subtitle)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash, subject_subtitle)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, subject_subtitle)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0.json'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash, subject_subtitle)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0-award-subject-type.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, subject_subtitle)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-award-subject-type-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash, subject_subtitle)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-award-subject-type-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, subject_subtitle)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0-award-subject-type.json'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash, review_url)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-simple-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, review_url)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-simple-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash, review_url)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-simple-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, review_url)) IS NULL FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-simple-3.0.json')));
+----
+0
+
+query IIIIIIIIIII
+SELECT reviewer_role, review_type, review_url, completion_year, completion_month, completion_day, review_group_id,
+       subject_type, subject_name, subject_subtitle, subject_translated_name_language
+FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0.json');
+----
+reviewer	review	https://example.com	2012	4	14	issn:1741-4857	journal-article	Name of the paper reviewed	Review subtitle	en
+
+# review-identifiers: 98765 (self), 123456 (part-of); subject-external-identifier: doi 10.1087/20120404
+query III
+SELECT container, value, relationship
+FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0.json');
+----
+review-identifiers	98765	self
+review-identifiers	123456	part-of
+peer-review	10.1087/20120404	self
+
+query III
+SELECT subject_type, subject_container_name, completion_month IS NULL
+FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0-award-subject-type.json')
+UNION ALL
+SELECT subject_type, subject_container_name, completion_month IS NULL
+FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-simple-3.0.json')
+ORDER BY 1 NULLS LAST;
+----
+award	Award title	false
+NULL	NULL	true
+
+# peer-review-full-3.0-research-resource.json (no XML twin)
+query III
+SELECT count(*), min(reviewer_role), min(subject_type) FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/write_samples/peer-review-full-3.0-research-resource.json');
+----
+1	reviewer	research-resource-proposal
+
+# peer-review-group-id.json (group-id-3.0/samples/group-id-3.0.xml is the XML form, other values)
+query IIII
+SELECT name, group_id, description, type FROM orcid_group_ids('reference/orcid-model/record_3.0/samples/write_samples/peer-review-group-id.json');
+----
+Group ID name	ringgold:355321	Description for a peer-review group id.	magazine
+
+query I
+SELECT count(*) FROM (
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_group_ids('reference/orcid-model/record_3.0/samples/write_samples/peer-review-group-id.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_group_ids('reference/orcid-model/group-id-3.0/samples/group-id-3.0.xml'))
+  UNION ALL
+  (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_group_ids('reference/orcid-model/group-id-3.0/samples/group-id-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_group_ids('reference/orcid-model/record_3.0/samples/write_samples/peer-review-group-id.json')));
+----
+0
+
+# ---------------------------------------------------------------- research resource
+# The JSON drops the resource-items wrapper ("resource-item": [...] next to
+# "proposal"). It fills the proposal's translated title and the items' url,
+# and an external-id-url on every id; the XML does neither.
+
+query I
+SELECT sum(n)::BIGINT FROM (
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, translated_title, translated_title_language)) IS NULL FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, translated_title, translated_title_language)) IS NULL FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.xml')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, translated_title, translated_title_language)) IS NULL FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, translated_title, translated_title_language)) IS NULL FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.xml')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.xml')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json'))));
+----
+0
+
+# research-resource-3.0.json: proposal "Proposal title", first host ORCID (of two), 5 resource items, 3 + 9 external ids
+query IIIIII
+SELECT title, translated_title_language, host_name, start_year, end_year, url
+FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json');
+----
+Proposal title	en	ORCID	1999	2012	http://xsede.org/GiantLaserAward
+
+query IIII
+SELECT ordinal, resource_name, resource_type, host_name
+FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json') ORDER BY ordinal;
+----
+1	Giant Laser 1	infrastructures	Lasers-R-US
+2	Moon Targets	infrastructures	Moon Holdings Ltd
+3	Rare Book Collection on Lasers	collections	Moon Holdings Ltd
+4	Giant Computer for Laser	equipment	Moon Holdings Ltd
+5	Legal advice regarding giant lasers	services	Moon Holdings Ltd
+
+# CROSSCHECK #9: every host. python3 -I:
+# proposal.hosts.organization has ORCID and NASA; each of the five
+# resource-item[i].hosts.organization has one (Lasers-R-US, then Moon Holdings Ltd).
+query IIIIIIIIII
+SELECT orcid, owner_put_code, container, item_ordinal, ordinal, host_name, host_city, host_region,
+       host_disambiguated_id, host_disambiguation_source
+FROM orcid_research_resource_hosts('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json');
+----
+NULL	NULL	proposal	NULL	1	ORCID	Bethesda	Maryland	grid.455335.1	GRID
+NULL	NULL	proposal	NULL	2	NASA	Washington	D.C	https://ror.org/027ka1x80	ROR
+NULL	NULL	resource-item	1	1	Lasers-R-US	Bethesda	Maryland	grid.455335.1	GRID
+NULL	NULL	resource-item	2	1	Moon Holdings Ltd	Bethesda	Maryland	grid.455335.1	GRID
+NULL	NULL	resource-item	3	1	Moon Holdings Ltd	Bethesda	Maryland	grid.455335.1	GRID
+NULL	NULL	resource-item	4	1	Moon Holdings Ltd	Bethesda	Maryland	grid.455335.1	GRID
+NULL	NULL	resource-item	5	1	Moon Holdings Ltd	Bethesda	Maryland	grid.455335.1	GRID
+
+query I
+SELECT count(*) FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/research-resource-3.0.json');
+----
+12
+
+# ---------------------------------------------------------------- works
+# work-full-3.0.json gives its first contributor an email, work-full-3.0.xml has none
+
+query I
+SELECT sum(n)::BIGINT FROM (
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, email)) IS NULL FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, email)) IS NULL FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, email)) IS NULL FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, email)) IS NULL FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json'))));
+----
+0
+
+# work-full-3.0.json: the citation-value starts with "\n\t\t\t" (trimmed); the self DOI is work:doi
+query IIIIIIIIIIIII
+SELECT item, title, subtitle, translated_title, translated_title_language, journal, short_description,
+       citation_type, starts_with(citation_value, '@article {ORCID2012,'), type, pub_year * 10000 + pub_month * 100 + pub_day,
+       doi, language_code || '/' || country || '/' || url
+FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json');
+----
+work	Work Title	Work subtitle	Translated-title English	en	Journal title	This is a short description of the work.	bibtex	true	journal-article	20220524	work:doi	en/CA/https://example.com
+
+query IIIIII
+SELECT ordinal, contributor_orcid, contributor_orcid_uri, credit_name, email, sequence || ':' || role
+FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.json') ORDER BY ordinal;
+----
+1	0000-0002-5391-5437	https://orcid.org/0000-0002-5391-5437	Jordan	example@example.com	first:author
+2	0000-0002-4325-871X	https://orcid.org/0000-0002-4325-871X	Fran	NULL	additional:author
+
+# the 51-contributor samples (no XML twin): 51 contributors each (python3 -I, len(contributors.contributor))
+query II
+SELECT (SELECT count(*) FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-51-contributors-3.0.json')),
+       (SELECT count(*) FROM orcid_contributors('reference/orcid-model/record_3.0/samples/write_samples/work-with-NISO-roles-51-contributors-3.0.json'));
+----
+51	51
+
+# bulk: bulk-work-3.0.xml dates both works, bulk-work-3.0.json neither;
+# the JSON's second identifier (isbn, part-of) has no url
+# and is not a self DOI, so that work has no doi (both XML works have one)
+query I
+SELECT sum(n)::BIGINT FROM (
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, pub_year, pub_month, pub_day, doi)) IS NULL FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/bulk-work-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, pub_year, pub_month, pub_day, doi)) IS NULL FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/bulk-work-3.0.xml')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, pub_year, pub_month, pub_day, doi)) IS NULL FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/bulk-work-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, pub_year, pub_month, pub_day, doi)) IS NULL FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/bulk-work-3.0.json')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/bulk-work-3.0.json')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/bulk-work-3.0.xml')))
+  UNION ALL
+  (SELECT count(*) AS n FROM (SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/bulk-work-3.0.xml')
+   EXCEPT
+   SELECT COLUMNS(* EXCLUDE (source_hash, url)) IS NULL FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/bulk-work-3.0.json'))));
+----
+0
+
+query IIII
+SELECT item, title, journal, doi FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/bulk-work-3.0.json');
+----
+work	Work # 1	journal # 1	ext-id-1
+work	Work # 2	book title	NULL
+
+# 3 and 100 works (python3 -I: len(d['bulk'])); one external id per work in both
+query IIII
+SELECT (SELECT count(*) FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/bulk-works-3-works-3.0.json')),
+       (SELECT count(*) FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/bulk-works-100-works-3.0.json')),
+       (SELECT count(*) FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/write_samples/bulk-works-100-works-3.0.json')),
+       (SELECT min(visibility) FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/bulk-works-3-works-3.0.json'));
+----
+3	100	100	public
+
+# ---------------------------------------------------------------- the record JSON (R/record-full-3.0.json)
+# python3 -I: 1 work-summary in 1 group, 2 funding-summary, 10 affiliation
+# summaries (1+3+1+1+1+1+2), 2 peer-review-summary, 1 research-resource-summary,
+# no contributors or resource items (summaries), 45 external-id under
+# external-ids, 1 person, 13 person items (5 other names, 2 urls, 0 emails,
+# 3 addresses, 2 keywords, 1 external identifier), 1 history.
+
+query IIIIIIIIIII
+SELECT (SELECT count(*) FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_fundings('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_research_resource_items('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_contributors('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_person('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')),
+       (SELECT count(*) FROM orcid_history('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json'));
+----
+1	2	10	2	1	0	0	45	1	13	1
+
+# epoch milliseconds become ORCID's XML form: created-date 1559917017189 -> 2019-06-07T14:16:57.189Z
+query IIIIIIIIII
+SELECT orcid, put_code, group_index, display_index, title, type, doi, visibility, created, source_name
+FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json');
+----
+0000-0002-7319-2192	178602	1	0	Work Title	journal-article	work:doi	public	2019-06-07T14:16:57.189Z	Demo Org Sandbox
+
+# a bare epoch number in a *-date member converts as the {"value": ...} form does
+# (yorc-rs's R::time takes both)
+query II
+SELECT created, last_modified FROM orcid_works_json('{"created-date": 1540896558250, "last-modified-date": {"value": 1540896558250},
+  "title": {"title": {"value": "T"}}, "type": "other", "path": "/0000-0002-1825-0097/work/5"}');
+----
+2018-10-30T10:49:18.250Z	2018-10-30T10:49:18.250Z
+
+query I
+SELECT string_agg(affiliation_type || ':' || put_code, ',' ORDER BY put_code)
+FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json');
+----
+education:6455,service:7093,education:8718,distinction:9264,education:9265,employment:9266,invited-position:9267,membership:9268,qualification:9269,service:9270
+
+query IIIIII
+SELECT orcid, given_names, family_name, name_visibility, biography, name_last_modified
+FROM orcid_person('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json');
+----
+0000-0002-7319-2192	Three	releasecandidate1	public	NULL	2018-10-30T10:49:18.538Z
+
+query I
+SELECT string_agg(kind || ':' || put_code, ',' ORDER BY put_code)
+FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json');
+----
+address:2621,address:2813,address:3527,external-identifier:3995,keyword:4249,other-name:4923,other-name:5028,other-name:5029,keyword:5097,other-name:5654,other-name:5813,researcher-url:9401,researcher-url:9519
+
+query IIIIII
+SELECT creation_method, submission_date, last_modified, claimed, verified_email, completion_date
+FROM orcid_history('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json');
+----
+Member-referred	2018-10-30T10:49:18.250Z	2019-06-07T14:16:56.886Z	true	true	NULL
+
+# CROSSCHECK #14: ORCID's JSON has the Java enum
+# names of history/creation-method ("MEMBER_REFERRED" above, python3 -I); the
+# rows have the XSD values, as the XML gives them and yorc-rs reads them
+# (creation_method_from_json): API, DIRECT, MEMBER_REFERRED, WEBSITE map,
+# anything else (an XSD value, an unknown name) is kept.
+query IIIIII
+SELECT (SELECT creation_method FROM orcid_history_json('{"creation-method": "API", "claimed": true}', json_root := 'history')),
+       (SELECT creation_method FROM orcid_history_json('{"creation-method": "DIRECT", "claimed": true}', json_root := 'history')),
+       (SELECT creation_method FROM orcid_history_json('{"creation-method": "MEMBER_REFERRED", "claimed": true}', json_root := 'history')),
+       (SELECT creation_method FROM orcid_history_json('{"creation-method": {"value": "WEBSITE"}, "claimed": true}', json_root := 'history')),
+       (SELECT creation_method FROM orcid_history_json('{"creation-method": "Member-referred", "claimed": true}', json_root := 'history')),
+       (SELECT creation_method FROM orcid_history_json('{"creation-method": "SOMETHING_NEW", "claimed": true}', json_root := 'history'));
+----
+API	Direct	Member-referred	website	Member-referred	SOMETHING_NEW
+
+# CROSSCHECK #15: a person's JSON with sorted keys,
+# as yorc-rs and yorc-zig write R/person-3.0.xml (one item of each kind,
+# values from the XML by reading), gives person_items in the XSD order of
+# person:person, the order of the XML read: other names, researcher URLs,
+# emails, addresses, keywords, external identifiers.
+query II
+SELECT kind, value FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/person-3.0.xml');
+----
+other-name	other-name-1
+researcher-url	url-name-1
+email	user1@email.com
+address	US
+keyword	keyword1
+external-identifier	value-1
+
+query II
+SELECT kind, value FROM orcid_person_items_json('{
+  "addresses": {"address": [{"country": {"value": "US"}, "put-code": 1, "visibility": "public"}]},
+  "biography": {"content": "biography", "visibility": "public"},
+  "emails": {"email": [{"email": "user1@email.com", "visibility": "public"}]},
+  "external-identifiers": {"external-identifier": [{"external-id-type": "type-1", "external-id-url": {"value": "http://url.com/1"}, "external-id-value": "value-1", "put-code": 1, "visibility": "public"}]},
+  "keywords": {"keyword": [{"content": "keyword1", "put-code": 1, "visibility": "public"}]},
+  "name": {"credit-name": {"value": "credit-name"}, "family-name": {"value": "family-name"}, "given-names": {"value": "give-names"}},
+  "other-names": {"other-name": [{"content": "other-name-1", "put-code": 1, "visibility": "public"}]},
+  "researcher-urls": {"researcher-url": [{"put-code": 1248, "url": {"value": "http://url.com/"}, "url-name": "url-name-1", "visibility": "public"}]}
+}', json_root := 'person');
+----
+other-name	other-name-1
+researcher-url	url-name-1
+email	user1@email.com
+address	US
+keyword	keyword1
+external-identifier	value-1
+
+# within a kind the array order stays; the kinds follow the XSD (sorted keys
+# again: "keywords" before "other-names")
+query II
+SELECT kind, value FROM orcid_person_items_json('{
+  "keywords": {"keyword": [{"content": "k2"}, {"content": "k1"}]},
+  "other-names": {"other-name": [{"content": "o2"}, {"content": "o1"}]}
+}', json_root := 'person');
+----
+other-name	o2
+other-name	o1
+keyword	k2
+keyword	k1
+
+# the same in a record: "activities-summary", "history", "orcid-identifier",
+# "person" sorted; the person's items still come in XSD order
+query II
+SELECT kind, value FROM orcid_person_items_json('{
+  "history": {"creation-method": "DIRECT"},
+  "orcid-identifier": {"host": "orcid.org", "path": "0000-0002-1825-0097", "uri": "https://orcid.org/0000-0002-1825-0097"},
+  "person": {"emails": {"email": [{"email": "a@example.org"}]}, "researcher-urls": {"researcher-url": [{"url": {"value": "http://example.org/"}, "url-name": "u"}]}}
+}', json_root := 'record');
+----
+researcher-url	u
+email	a@example.org
+
+# CROSSCHECK #10: the assertion origin in every
+# section with a common:source. python3 -I over record-full-3.0.json
+# (source/assertion-origin-orcid/path per item): funding 5909; affiliations
+# 9264-9270; peer review 2389; research resource 1498; work 178602; person
+# items other-name 5813, address 3527, keyword 5097, external-identifier 3995;
+# always "Three releasecandidate1" / 0000-0002-7319-2192, never a client id.
+query IIIII
+SELECT (SELECT string_agg(put_code::VARCHAR, ',' ORDER BY put_code) FROM orcid_fundings('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') WHERE assertion_origin_orcid = '0000-0002-7319-2192'),
+       (SELECT string_agg(put_code::VARCHAR, ',' ORDER BY put_code) FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') WHERE assertion_origin_orcid = '0000-0002-7319-2192'),
+       (SELECT string_agg(put_code::VARCHAR, ',' ORDER BY put_code) FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') WHERE assertion_origin_orcid = '0000-0002-7319-2192'),
+       (SELECT string_agg(put_code::VARCHAR, ',' ORDER BY put_code) FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') WHERE assertion_origin_orcid = '0000-0002-7319-2192'),
+       (SELECT string_agg(kind || ':' || put_code, ',' ORDER BY put_code) FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') WHERE assertion_origin_orcid = '0000-0002-7319-2192');
+----
+5909	9264,9265,9266,9267,9268,9269,9270	2389	1498	address:3527,external-identifier:3995,keyword:5097,other-name:5813
+
+query IIII
+SELECT count(*) FILTER (WHERE assertion_origin_client_id IS NOT NULL),
+       count(DISTINCT assertion_origin_name),
+       min(assertion_origin_name),
+       count(*) FILTER (WHERE (assertion_origin_name IS NULL) <> (assertion_origin_orcid IS NULL))
+FROM (SELECT assertion_origin_name, assertion_origin_orcid, assertion_origin_client_id FROM orcid_fundings('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')
+      UNION ALL SELECT assertion_origin_name, assertion_origin_orcid, assertion_origin_client_id FROM orcid_affiliations('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')
+      UNION ALL SELECT assertion_origin_name, assertion_origin_orcid, assertion_origin_client_id FROM orcid_peer_reviews('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')
+      UNION ALL SELECT assertion_origin_name, assertion_origin_orcid, assertion_origin_client_id FROM orcid_research_resources('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')
+      UNION ALL SELECT assertion_origin_name, assertion_origin_orcid, assertion_origin_client_id FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')
+      UNION ALL SELECT assertion_origin_name, assertion_origin_orcid, assertion_origin_client_id FROM orcid_history('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json'));
+----
+0	1	Three releasecandidate1	0
+
+# works/group[0]: external-id[1] has external-id-normalized-error
+# {"error-code": "8001", "error-message": "Cannot normalize identifier value doi:work:doi"},
+# at group level and in the work summary
+query III
+SELECT count(*), min(normalized_error_code), min(normalized_error)
+FROM orcid_external_ids('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') WHERE normalized_error_code IS NOT NULL;
+----
+2	8001	Cannot normalize identifier value doi:work:doi
+
+# the person external identifier 3995 has no normalized form
+query III
+SELECT normalized, normalized_error, normalized_error_code
+FROM orcid_person_items('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') WHERE kind = 'external-identifier';
+----
+NULL	NULL	NULL
+
+# /orcid-identifier of the record: the sandbox
+query II
+SELECT orcid_uri, orcid_host FROM orcid_person('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json');
+----
+https://sandbox.orcid.org/0000-0002-7319-2192	sandbox.orcid.org
+
+# CROSSCHECK #9: research-resource-summary 1498 has one host
+# (proposal.hosts.organization[0]: NASA, Washington, District of Columbia, US, grid.238252.c, GRID)
+query IIIIIIIIIII
+SELECT orcid, owner_put_code, ordinal, host_name, host_city, host_region, host_country,
+       host_disambiguated_id, host_disambiguation_source, container, item_ordinal
+FROM orcid_research_resource_hosts('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json');
+----
+0000-0002-7319-2192	1498	1	NASA	Washington	District of Columbia	US	grid.238252.c	GRID	proposal	NULL
+
+# the record's timeline reads JSON too (works, fundings, ... all carry dates)
+query I
+SELECT count(*) > 0 FROM orcid_timeline('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json');
+----
+true
+
+# ---------------------------------------------------------------- detection, globs, archives, metadata
+
+# a glob mixing both formats: one work each
+query II
+SELECT count(*), string_agg(title, ',' ORDER BY title)
+FROM orcid_works('reference/orcid-model/record_3.0/samples/write_samples/work-full-3.0.*');
+----
+2	Work Title,Work Title
+
+# test/data/json/orcid_test_json.tar (tar -tvf): R/record-full-3.0.json as
+# orcid_test_json/0000-0002-7319-2192.json, R/work-full-3.0.xml (put-code 123),
+# and a README.txt that the default member filter (*.xml, *.json) skips
+query II
+SELECT count(*), string_agg(put_code::VARCHAR, ',' ORDER BY put_code) FROM orcid_works('test/data/json/orcid_test_json.tar');
+----
+2	123,178602
+
+query I
+SELECT count(*) FROM orcid_works('test/data/json/orcid_test_json.tar', members := '*.json');
+----
+1
+
+query IIII
+SELECT name, orcid, format, left(xml, 1) FROM orcid_documents('test/data/json/orcid_test_json.tar') ORDER BY name;
+----
+0000-0002-7319-2192.json	0000-0002-7319-2192	json	{
+work-full-3.0.xml	NULL	xml	<
+
+query I
+SELECT count(*) FROM orcid_documents('test/data/json/orcid_test_json.tar', members := '*');
+----
+3
+
+# source_hash is the SHA-256 of the bytes read, whatever the format
+query I
+SELECT bool_and(w.source_hash = sha256(t.content))
+FROM read_text('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') t,
+     orcid_external_ids_json(t.content) w;
+----
+true
+
+# ---------------------------------------------------------------- the _json twins
+
+query III
+SELECT count(*), min(w.title), min(w.source_hash) = (SELECT min(source_hash) FROM orcid_works('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json'))
+FROM read_text('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json') t, orcid_works_json(t.content) w;
+----
+1	Work Title	true
+
+# constant argument (no lateral join)
+query I
+SELECT count(*) FROM orcid_affiliations_json((SELECT content FROM read_text('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')));
+----
+10
+
+query I
+SELECT affiliation_type FROM orcid_affiliations_json('{"role-title": "R", "organization": {"name": "O", "address": {}}}', json_root := 'membership');
+----
+membership
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM orcid_works_json(NULL));
+----
+32
+
+query I
+SELECT count(*) FROM orcid_works_json(NULL);
+----
+0
+
+statement error
+SELECT * FROM orcid_works_json('{"title": ');
+----
+malformed JSON
+
+# each twin reads one format: XML text is not JSON
+statement error
+SELECT * FROM orcid_works_json('<work:work/>');
+----
+malformed JSON
+
+query I
+SELECT count(*) FROM orcid_works_xml('{"title": {"title": {"value": "T"}}, "type": "other"}');
+----
+0
+
+statement error
+SELECT * FROM orcid_works_json('{"title": {"title": {"value": "T"}}, "type": "other"}', json_root := 'Work!');
+----
+json_root must be an ORCID element name
+
+# a JSON document that is no ORCID document gives no rows
+query I
+SELECT count(*) FROM orcid_works_json('{"name": "x", "version": "1.0", "dependencies": {}}');
+----
+0
+
+# API messages (ORCID publishes no JSON samples for them: these JSON texts are the
+# XML samples of reference/orcid-model written out in ORCID's JSON conventions)
+# error-3.0.xml
+query IIIIII
+SELECT a.response_code, a.developer_message, a.user_message, a.error_code, a.more_info,
+       (SELECT count(*) FROM (SELECT * EXCLUDE (source_hash) FROM orcid_errors('reference/orcid-model/record_3.0/samples/read_samples/error-3.0.xml')
+                              EXCEPT SELECT * EXCLUDE (source_hash) FROM orcid_errors_json('{"response-code": 0, "developer-message": "error:developer-message", "user-message": "error:user-message", "error-code": 0, "more-info": "http://tempuri.org"}')))
+FROM orcid_errors_json('{"response-code": 0, "developer-message": "error:developer-message", "user-message": "error:user-message", "error-code": 0, "more-info": "http://tempuri.org"}') a;
+----
+0	error:developer-message	error:user-message	0	http://tempuri.org	0
+
+# search-3.0.xml: num-found="1", one result
+query IIIII
+SELECT num_found, ordinal, orcid, orcid_uri, item
+FROM orcid_search_results_json('{"result": [{"orcid-identifier": {"uri": "https://orcid.org/8888-8888-8888-8880", "path": "8888-8888-8888-8880", "host": "orcid.org"}}], "num-found": 1}');
+----
+1	1	8888-8888-8888-8880	https://orcid.org/8888-8888-8888-8880	result
+
+# bulk-work-err.xml: a work, then an error at entry 2
+query IIII
+SELECT container, position, response_code, error_code
+FROM orcid_errors_json('{"bulk": [{"work": {"put-code": 156043, "title": {"title": {"value": "W"}}, "type": "journal-article"}}, {"error": {"response-code": 400, "developer-message": "Invalid work type", "user-message": "Please specify a work type.", "error-code": 9037, "more-info": "http://members.orcid.org/api/api-error-codes"}}]}');
+----
+bulk	2	400	9037
+
+# summary-3.0.xml: put-code is an element of the summary items (also in JSON)
+query IIII
+SELECT kind, put_code, type, validated
+FROM orcid_summary_items_json('{"orcid-identifier": {"uri": "https://orcid.org/8888-8888-8888-8880", "path": "8888-8888-8888-8880", "host": "orcid.org"}, "employments": {"count": 5, "employment": [{"put-code": 1, "type": "employment", "organization-name": "Fake role title 1", "validated": false}]}}');
+----
+employment	1	employment	false
+
+query I
+SELECT employment_count FROM orcid_summary_json('{"orcid-identifier": {"uri": "https://orcid.org/8888-8888-8888-8880", "path": "8888-8888-8888-8880", "host": "orcid.org"}, "employments": {"count": 5, "employment": []}}');
+----
+5
+
+# ---------------------------------------------------------------- orcid_changes across formats
+
+# the identical pair: no changes, whichever format each side is in
+query I
+SELECT count(*) FROM orcid_changes('reference/orcid-model/record_3.0/samples/write_samples/external-identifier-3.0.xml',
+                                   'reference/orcid-model/record_3.0/samples/write_samples/external-identifier-3.0.json');
+----
+0
+
+query IIII
+SELECT section, kind, change, field
+FROM orcid_changes_json('{"content": "a"}', '{"content": "b"}', json_root := 'keyword');
+----
+person_items	keyword	modified	value
+
+query III
+SELECT section, change, count(*)
+FROM orcid_changes_json(NULL, (SELECT content FROM read_text('reference/orcid-model/record_3.0/samples/read_samples/record-full-3.0.json')))
+GROUP BY ALL ORDER BY section;
+----
+affiliations	added	10
+fundings	added	2
+history	added	1
+peer_reviews	added	2
+person	added	1
+person_items	added	13
+research_resources	added	1
+works	added	1
