@@ -34,7 +34,7 @@ SELECT count(*) FROM docs;
 
 statement ok
 CREATE TABLE expected AS
-SELECT regexp_extract(filename, '([^/]+)\.(xml|json)$', 1) AS stem, regexp_extract(filename, '\.(xml|json)$', 1) AS fmt,
+SELECT regexp_extract(filename, '([^/\\]+)\.(xml|json)$', 1) AS stem, regexp_extract(filename, '\.(xml|json)$', 1) AS fmt,
        content
 FROM read_text('test/data/crosswalk/write_samples/*');
 
