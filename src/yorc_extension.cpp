@@ -1603,7 +1603,7 @@ static void RegisterSection(ExtensionLoader &loader) {
 	OrcidAddNamedParameter(json, "json_root", LogicalType::VARCHAR);
 	json_set.AddFunction(json);
 	// (json, json_root): the lateral form, see JsonRootColumn
-	json.arguments.push_back(LogicalType::VARCHAR);
+	OrcidAddVarcharArgument(json);
 	json_set.AddFunction(json);
 	loader.RegisterFunction(std::move(json_set));
 }
@@ -1664,7 +1664,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	changes_json.in_out_function = ChangesXmlInOut;
 	OrcidAddNamedParameter(changes_json, "json_root", LogicalType::VARCHAR);
 	changes_json_set.AddFunction(changes_json);
-	changes_json.arguments.push_back(LogicalType::VARCHAR); // (old, new, json_root), see JsonRootColumn
+	OrcidAddVarcharArgument(changes_json); // (old, new, json_root), see JsonRootColumn
 	changes_json_set.AddFunction(changes_json);
 	loader.RegisterFunction(std::move(changes_json_set));
 

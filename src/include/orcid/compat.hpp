@@ -189,17 +189,37 @@ inline void OrcidRegisterScalarSet(ExtensionLoader &loader, const string &name, 
 inline void OrcidAddBooleanSetting(ExtensionLoader &loader, const string &name, const string &description,
                                    bool default_value) {
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+#if ORCID_DUCKDB_V2
+	config.AddExtensionOption(Identifier(name), description, LogicalType::BOOLEAN, Value::BOOLEAN(default_value));
+#else
 	config.AddExtensionOption(name, description, LogicalType::BOOLEAN, Value::BOOLEAN(default_value));
+#endif
 }
 
 //! The current value of a BOOLEAN setting registered above: false when it is
 //! unset, NULL or unknown.
 inline bool OrcidBooleanSetting(ClientContext &context, const string &name) {
 	Value value;
+#if ORCID_DUCKDB_V2
+	if (!context.TryGetCurrentSetting(Identifier(name), value) || value.IsNull()) {
+#else
 	if (!context.TryGetCurrentSetting(name, value) || value.IsNull()) {
+#endif
 		return false;
 	}
 	return BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
+}
+
+//! Add one more positional VARCHAR argument to a table function (the json_root
+//! lateral overloads of the _json twins and orcid_changes_json).
+//! v1.5.6: TableFunction::arguments is a vector; v2.0: the signature is built
+//! with FunctionSignature::AddParameter, which names the parameter col<N>.
+inline void OrcidAddVarcharArgument(TableFunction &function) {
+#if ORCID_DUCKDB_V2
+	function.GetSignature().AddParameter(LogicalType::VARCHAR);
+#else
+	function.arguments.push_back(LogicalType::VARCHAR);
+#endif
 }
 
 //! Register a file reader that takes one VARCHAR path.
