@@ -238,6 +238,11 @@ inline TableFunction OrcidWithVarcharArgument(TableFunction function) {
 inline void OrcidRegisterReader(ExtensionLoader &loader, TableFunction function, const string &name,
                                 const char *reader_type) {
 #if ORCID_DUCKDB_V2
+	// The wrapper drives the scan and reports progress by the files it has
+	// completed; the wrapped function's own table_scan_progress would run
+	// with the wrapper's per-file bind data and state, which are initialized
+	// lazily and may not exist yet when the progress bar polls an open file.
+	function.table_scan_progress = nullptr;
 	TableFunctionMultiFileSettings settings;
 	settings.reader_type = reader_type;
 	// Fixed column list: one file determines the schema.
