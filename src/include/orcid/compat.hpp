@@ -210,16 +210,21 @@ inline bool OrcidBooleanSetting(ClientContext &context, const string &name) {
 	return BooleanValue::Get(value.DefaultCastAs(LogicalType::BOOLEAN));
 }
 
-//! Add one more positional VARCHAR argument to a table function (the json_root
-//! lateral overloads of the _json twins and orcid_changes_json).
-//! v1.5.6: TableFunction::arguments is a vector; v2.0: the signature is built
-//! with FunctionSignature::AddParameter, which names the parameter col<N>.
-inline void OrcidAddVarcharArgument(TableFunction &function) {
+//! The same table function with one more positional VARCHAR argument (the
+//! json_root lateral overloads of the _json twins and orcid_changes_json).
+//! Call this before OrcidAddNamedParameter: a v2.0 signature must order every
+//! positional parameter before the "**options" of the typed keyword
+//! arguments, so the extra argument is appended to a copy (a function object
+//! carries its signature by value) before the kwargs go on. v1.5.6:
+//! TableFunction::arguments is a vector, and named parameters are a map, so
+//! the order never mattered there.
+inline TableFunction OrcidWithVarcharArgument(TableFunction function) {
 #if ORCID_DUCKDB_V2
 	function.GetSignature().AddParameter(LogicalType::VARCHAR);
 #else
 	function.arguments.push_back(LogicalType::VARCHAR);
 #endif
+	return function;
 }
 
 //! Register a file reader that takes one VARCHAR path.

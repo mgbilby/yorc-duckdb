@@ -1600,11 +1600,14 @@ static void RegisterSection(ExtensionLoader &loader) {
 	TableFunction json(OrcidName(base + "_json"), {LogicalType::VARCHAR}, nullptr, JsonBind<I>, nullptr,
 	                   XmlInitLocal);
 	json.in_out_function = XmlInOut;
+	// (json, json_root): the lateral form, see JsonRootColumn. The copy is
+	// taken before the keyword argument is added: a v2.0 signature orders the
+	// positional parameters before "**options" (see OrcidWithVarcharArgument).
+	TableFunction json_lateral = OrcidWithVarcharArgument(json);
 	OrcidAddNamedParameter(json, "json_root", LogicalType::VARCHAR);
+	OrcidAddNamedParameter(json_lateral, "json_root", LogicalType::VARCHAR);
 	json_set.AddFunction(json);
-	// (json, json_root): the lateral form, see JsonRootColumn
-	OrcidAddVarcharArgument(json);
-	json_set.AddFunction(json);
+	json_set.AddFunction(json_lateral);
 	loader.RegisterFunction(std::move(json_set));
 }
 
@@ -1662,10 +1665,13 @@ static void LoadInternal(ExtensionLoader &loader) {
 	TableFunction changes_json("orcid_changes_json", {LogicalType::VARCHAR, LogicalType::VARCHAR}, nullptr,
 	                           ChangesJsonBind, nullptr, ChangesXmlInitLocal);
 	changes_json.in_out_function = ChangesXmlInOut;
+	// (old, new, json_root): the lateral form, see JsonRootColumn; the copy is
+	// taken before the keyword argument is added, as in RegisterSection.
+	TableFunction changes_json_lateral = OrcidWithVarcharArgument(changes_json);
 	OrcidAddNamedParameter(changes_json, "json_root", LogicalType::VARCHAR);
+	OrcidAddNamedParameter(changes_json_lateral, "json_root", LogicalType::VARCHAR);
 	changes_json_set.AddFunction(changes_json);
-	OrcidAddVarcharArgument(changes_json); // (old, new, json_root), see JsonRootColumn
-	changes_json_set.AddFunction(changes_json);
+	changes_json_set.AddFunction(changes_json_lateral);
 	loader.RegisterFunction(std::move(changes_json_set));
 
 	OrcidAddBooleanSetting(loader, CROSSWALK_SETTING,
