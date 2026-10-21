@@ -4,7 +4,7 @@ set(TARGET_NAME yorc)
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
 set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
-project(${TARGET_NAME} VERSION 0.1.0)
+project(${TARGET_NAME} VERSION 0.2.0)
 
 include_directories(src/include)
 

@@ -14,8 +14,7 @@ see [Caveats](#caveats). The parity results do not depend on them.
 
 ## Results
 
-_2026-10-18, on the maintainer's machine, yorc 0.1.0 sources before
-release: median of 5 runs, the order of the programs rotating between runs;
+_On the maintainer's machine: median of 5 runs, the order of the programs rotating between runs;
 single-threaded. DuckDB: the v1.5.6 CLI with the extension linked in
 (`make release`), `SET threads = 1`. Rust: `--release`, fat LTO,
 `-C target-cpu=native`. Zig 0.18.0-dev.131+41f885830: ReleaseFast for the
@@ -53,7 +52,7 @@ them, DuckDB/Java is over 3 workloads and DuckDB/Rust over 7.
 
 For the libraries, over the same run: Rust/Java 0.67, Zig/Java 0.58,
 Zig/Rust 0.76 (geometric means; Zig on its own allocator). A later run
-(2026-10-19, Rust and Zig both on malloc, no DuckDB leg) gives Rust/Java
+A later run (Rust and Zig both on malloc, no DuckDB leg) gives Rust/Java
 0.67, Zig/Java 0.46 and Zig/Rust 0.52; see the libraries' BENCHMARKS.md.
 
 What the run says about yorc-duckdb, with the caveats below:

@@ -23,7 +23,7 @@ Every section accepts any ORCID v3.0 document that contains its items: a full `/
 
 Text is whitespace-trimmed; empty or missing values (and JSON `null`) are NULL; numbers that are not plain digits are NULL; when an element repeats, the first one wins, except in list columns, which join every value with `; `. Malformed XML raises `orcid: malformed XML in <file or input row>: <reason>`, malformed JSON `orcid: malformed JSON in <file or input row>: <reason> at byte <n>`. Both formats must be UTF-8 (ORCID's only encoding): a document that is not, such as a Latin-1 file, is malformed (`orcid: malformed XML in 'x.xml': invalid UTF-8 at byte 190`), whatever its XML declaration says, so no invalid text reaches a `VARCHAR` column. A character reference that names no Unicode character (`&#xD800;`, `&#x110000;`, `&#0;`) is kept as literal text.
 
-**Column positions are stable.** A column added to a section goes after the existing ones (as `peer_reviews.subject_translated_name_language` did), so `SELECT *` gains columns at the end and the earlier ones keep their positions. The columns appended for the context gaps of the schema (CROSSCHECK #10: the assertion origin outside `works`, normalized ids outside `external_ids`, the normalization error code, a contributor's host, the record's `orcid-identifier` URI and host, a notification item's URL, relationship and normalized id) are listed per section in [COVERAGE.md](COVERAGE.md#columns-added-on-2026-10-18). A query that inserts `SELECT *` into an existing table, or unions it with an older result, needs the new columns (or an explicit column list).
+**Column positions are stable.** A column added to a section goes after the existing ones (as `peer_reviews.subject_translated_name_language` did), so `SELECT *` gains columns at the end and the earlier ones keep their positions. The columns appended for the context gaps of the schema (the assertion origin outside `works`, normalized ids outside `external_ids`, the normalization error code, a contributor's host, the record's `orcid-identifier` URI and host, a notification item's URL, relationship and normalized id) are listed per section in [COVERAGE.md](COVERAGE.md#columns-added-for-the-context-gaps). A query that inserts `SELECT *` into an existing table, or unions it with an older result, needs the new columns (or an explicit column list).
 
 ## Memory of lateral joins
 
@@ -52,7 +52,7 @@ INSERT INTO works BY NAME
   FROM stage s, orcid_works_xml((SELECT xml FROM stage)) w;
 ```
 
-DuckDB v2.0 (`v2.0-cyanoptera` at f8f3f4dc, checked 2026-10-17) plans it the
+DuckDB v2.0 (since extension 0.2.0) makes it the
 same way, with the in-out side estimated at 0 rows and built: 7.2 GB and 8.6 s
 for the 5.4 MB record. A second staged row brings that to 92 MB and 0.17 s, and
 the constant form below takes 0.07 s and 74 MB.

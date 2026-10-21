@@ -96,8 +96,7 @@ duckdb/, extension-ci-tools/   submodules pinned to v1.5.6
    `DiffDocuments`, the tar reader; `make fuzz`).
 3a. ✅ ORCID v3.0 JSON: every reader auto-detects it (files, globs, archive
    members), `_json` twins, `orcid_changes_json`; writers for every write
-   sample item type (XML and JSON), bulk works. (The validators and
-   `COPY ... TO (FORMAT orcid_xml | orcid_json)` were removed on 2026-10-18:
+   sample item type (XML and JSON), bulk works. (No validators or `COPY ... TO` formats:
    the extension does not provide access to the ORCID Member API.)
 4. Corpus tests on a 5,000-record Public Data File sample (local, not CI).
 5. Publish at github.com/mgbilby/yorc-duckdb and submit to duckdb/community-extensions.

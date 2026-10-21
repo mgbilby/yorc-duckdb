@@ -51,7 +51,7 @@ The documents it writes are strings or files; it sends nothing anywhere.
   in [BENCHMARKS.md](BENCHMARKS.md), reproducible with the public harness
   [yorc-bench](https://github.com/mgbilby/yorc-bench).
 
-Current release: **0.1.0** (see [`CHANGELOG.md`](CHANGELOG.md)).
+Current release: **0.2.0** (see [`CHANGELOG.md`](CHANGELOG.md)).
 
 ## Installation
 
@@ -203,16 +203,17 @@ Every column, its type and its source path in the ORCID schema are listed in
 | [docs/LINKING.md](docs/LINKING.md) | joining to Crossref and DataCite DOIs, ROR organisations, ISNI and Wikidata |
 | [docs/MIGRATING.md](docs/MIGRATING.md) | from ad-hoc ORCID XML pipelines to SQL, step by step |
 | [docs/LOCKED_DEPRECATED.md](docs/LOCKED_DEPRECATED.md) | locked and deprecated records in the Public Data File |
-| [docs/DUCKDB2.md](docs/DUCKDB2.md) | the DuckDB v2.0 pre-release |
+| [docs/DUCKDB2.md](docs/DUCKDB2.md) | the DuckDB v2.0 support |
 | [BENCHMARKS.md](BENCHMARKS.md) | timings (provisional) next to yorc-rs, yorc-zig and ORCID's Java library, and the cross-check of their outputs; the harness is [yorc-bench](https://github.com/mgbilby/yorc-bench) |
 | [ARCHITECTURE.md](ARCHITECTURE.md), [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md) | layout, conventions and release cadence, the changes of each release |
 | [test/README.md](test/README.md), [audit/README.md](audit/README.md) | the test suite; provenance and verification |
 
 ## DuckDB versions
 
-Built and tested against **DuckDB v1.5.6**. The source also compiles against
-the v2.0 pre-release, where the file readers become multi-file readers (lists of
-paths, a `filename` column, parallel across files). See
+Built and tested against **DuckDB v2.0.0 and v1.5.6**. On v2.0 the file readers
+are multi-file readers: lists of paths, `filename`/`file_index` columns,
+`union_by_name`, `hive_partitioning`, parallel across files (since extension
+0.2.0). See
 [`docs/DUCKDB2.md`](docs/DUCKDB2.md).
 
 ## Building

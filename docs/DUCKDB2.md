@@ -1,8 +1,8 @@
 # yorc-duckdb on DuckDB v2.0
 
-**Today:** built and released against **DuckDB v1.5.6** (submodules,
-CI workflow and `description.yml` all agree). The source also compiles against
-the v2.0 pre-release (`v2.0-cyanoptera`). Every API difference is in
+**Extension 0.2.0:** built and released against **DuckDB v2.0.0**
+(submodules, CI workflow and `description.yml` all agree); DuckDB v1.5.6
+keeps working through the same source. Every API difference is in
 [`src/include/orcid/compat.hpp`](../src/include/orcid/compat.hpp), and nothing
 else in the source branches on the version (the build has one
 `if(COMMAND duckdb_extension_statically_link)` in `extension_config.cmake`).
@@ -28,7 +28,7 @@ STRUCT / LIST accessors, flat `VARCHAR` results written through
 `OrcidFlatData`; two overloads in a `ScalarFunctionSet`,
 `OrcidRegisterScalarSet`). Each of these is a v1.5.6 API; if v2.0 renames
 one, the shim goes in `compat.hpp`.
-Crosswalk mode (2026-10-18) adds the `orcid_crosswalk` setting
+Crosswalk mode adds the `orcid_crosswalk` setting
 (`DBConfig::AddExtensionOption` on `ExtensionLoader::GetDatabaseInstance()`,
 read with `ClientContext::TryGetCurrentSetting`: the shims
 `OrcidAddBooleanSetting` / `OrcidBooleanSetting` in `compat.hpp`), reads it in
@@ -44,43 +44,20 @@ Detection: `DUCKDB_MAJOR_VERSION >= 2`, or the presence of
 `duckdb/common/multi_file/table_function_multi_file.hpp`, which only v2.0 has.
 (`duckdb/common/identifier.hpp` is not a usable signal: v1.5.6 backported it.)
 
-## What users get on v2.0
+## What users get on DuckDB v2.0 (since extension 0.2.0)
 
-`orcid_works` becomes a multi-file reader: `orcid_works(['a.xml', 'b.xml'])`,
+`orcid_works` is a multi-file reader: `orcid_works(['a.xml', 'b.xml'])`,
 the `filename` and `file_index` virtual columns, `union_by_name`,
 `hive_partitioning`, and files scheduled across threads. (On v1.5.6 the reader parallelizes itself;
 see REFERENCE.md, "Parallel scans and row order".) Results are otherwise identical. The sqllogictests
 are written to pass on both (the missing-file tests match only the file name,
 because the error wording differs); confirm with the manual v2.0 CI job.
 
-## Last local check against v2.0
+## Last check against v2.0
 
-2026-10-17, `duckdb` `v2.0-cyanoptera` at f8f3f4dcd954 and `extension-ci-tools`
-`v2.0-cyanoptera`, in a separate checkout (the submodules stayed at v1.5.6):
-- The extension builds once it uses the three shims added that day (named
-  parameters, projection pushdown, static linking).
-- All 10 sqllogictest files pass.
-- The maintainer's 10,000-record corpus check passes: 10,000 files, 0 mismatches.
-
-Same day, second check (a shell-only build at the same commits, with
-`max_member_bytes` added): the one-row lateral derive still plans the in-out
-side as the hash join's build side (`INOUT_FUNCTION (est=0)`). It peaks at
-7.2 GB for the 5.4 MB record, as on v1.5.6, so the constant-argument form
-(REFERENCE.md, "Memory of lateral joins") is needed on both. `max_member_bytes`
-behaves as on v1.5.6: the error names the member, and 0 is a binder error.
-
-Timings on the committed corpus, 4-core container, best of 3, seconds:
-
-| query | threads=1 | threads=4 |
-|---|---|---|
-| `CREATE TABLE AS SELECT * FROM orcid_works('orcid-corpus.tar.gz')` | 3.92 | 2.69 |
-| same, over the extracted directory (10,000 files) | 5.20 | 4.00 |
-| `SELECT count(*) FROM orcid_person('orcid-corpus.tar.gz')` | 3.20 | 1.31 |
-
-The directory scan is slower than on v1.5.6 (3.53 / 1.85 s), because the
-framework binds and initializes every file on its own. The v2.0 batch API
-(`claim_batch` / `prepare_batch`) is the place to tune this once v2.0 is
-released.
+DuckDB `v2.0.0` (the release): the extension builds, `make test` and
+`make core_test` pass, and the multi-file smoke tests (list paths,
+`filename`) behave as above.
 
 ## Checking the v2.0 build before release
 

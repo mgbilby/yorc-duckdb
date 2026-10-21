@@ -23,11 +23,11 @@ after changing any of them and replace the table.
 | structural (elements whose content is only other elements) | **105** |
 | — used: item elements, path steps, group/owner markers | **101** |
 | — not mapped | **4**: `preferences`, `application-orcid`, `application-group-orcid`, `group-orcid-identifier` |
-| written by a writer (`src/core/writer.cpp`) | **90** names, 52 of them data-bearing (2026-10-18: `host`, a contributor's `contributor-orcid/host`) |
+| written by a writer (`src/core/writer.cpp`) | **90** names, 52 of them data-bearing (including `host` and a contributor's `contributor-orcid/host`) |
 
-The 2026-10-18 changes (CROSSCHECK #9 and #10) leave the name totals as they
-were: every name they read was already carried by some column. They close
-the context gaps below, where a mapped name was not read in every place the
+The context-gap changes leave the name totals as they were: every name
+they read was already carried by some column. They close the context gaps
+below, where a mapped name was not read in every place the
 XSDs put it, and add the section `research_resource_hosts` (19 sections).
 
 Plus one attribute declared by reference rather than by name, `xml:lang`
@@ -69,8 +69,7 @@ Plus one attribute declared by reference rather than by name, `xml:lang`
 
 Places where a name that is mapped elsewhere is not read. Found by reading
 the XSDs against the column paths in `src/core/sections.cpp`. The table
-lists what is left; the gaps closed on 2026-10-18 (CROSSCHECK #9 and #10)
-follow it.
+lists what is left; the closed gaps follow it.
 
 | where | not read | note |
 |---|---|---|
@@ -80,7 +79,7 @@ follow it.
 | `source-orcid`, `source-client-id`, `assertion-origin-*` as `uri` / `host` | everywhere | the `path` is read; the URI and host follow from it (`https://orcid.org/<path>`, `orcid.org`) |
 | `@transient` | everywhere | always `true` (see the table) |
 
-### Closed on 2026-10-18
+### Closed
 
 | gap | now read in | columns |
 |---|---|---|
@@ -97,7 +96,7 @@ follow it.
 `external-identifier` (summary-3.0.xsd) has only type, value and URL, so
 there is nothing to read there.
 
-## Columns added on 2026-10-18
+## Columns added for the context gaps
 
 Every new column is appended after the existing ones, so the positions of
 the earlier columns do not move (as with `peer_reviews`' 36th column,

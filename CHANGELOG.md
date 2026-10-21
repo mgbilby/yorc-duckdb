@@ -7,17 +7,28 @@ the version is set in `description.yml` (`extension.version`) and
 commit reports that tag as `extension_version` in `duckdb_extensions()`; any
 other build reports the commit's short hash.
 
-## [0.1.0] - unreleased
+## [0.2.0] - 2026-10-21
+
+Built and released against DuckDB v2.0.0; DuckDB v1.5.6 keeps working
+(docs/DUCKDB2.md). On DuckDB v2.0:
+
+- the `orcid_<section>` file readers are multi-file readers: a list of
+  paths (`orcid_works(['a.xml', 'b.xml'])`);
+- the `filename` and `file_index` virtual columns on every scan;
+- `union_by_name` and `hive_partitioning` options;
+- files scheduled across threads.
+
+Results are otherwise identical on both DuckDB versions. No source change
+was needed: every API difference between v1.5.6 and v2.0 is shimmed in
+`src/include/orcid/compat.hpp`.
+
+## [0.1.0] - 2026-10-19
 
 First release. Built and tested against DuckDB v1.5.6; the source also builds
 against the DuckDB v2.0 pre-release (`docs/DUCKDB2.md`). Reads and writes
 ORCID v3.0 XML and JSON. No access to the ORCID Sandbox or the ORCID Member
 API, and no requests to ORCID. yorc-duckdb is an independent open-source
 project, not affiliated with, endorsed by or sponsored by ORCID, Inc.
-
-Developed as duckdb-orcid (now yorc; extension `yorc`, repository
-`yorc-duckdb`), renamed on 2026-10-18 to stay clear of ORCID's trademark.
-The SQL functions keep their `orcid_` names.
 
 ### Tables (each as `orcid_<section>(path)`, `orcid_<section>_xml(xml)` and `orcid_<section>_json(json)`)
 - Record sections from the ORCID v3.0 message schema: `works`, `fundings`,
@@ -33,30 +44,29 @@ The SQL functions keep their `orcid_` names.
   deprecated ones), `notifications`, `group_ids`.
 - `orcid_documents(path)`: the raw documents of files, globs and archive members
   (file, member, name, iD, xml), to pair records across dump releases.
-- `orcid_dump_sample(archive, n, seed)` (2026-10-18): a seeded
+- `orcid_dump_sample(archive, n, seed)`: a seeded
   reservoir sample of the records of a dump, the same picks as yorc-rs's
   `dump::Reservoir` and yorc-zig's `reservoir` (SplitMix64, Algorithm R, the
   same eligibility rule); members not kept are never read
   (`src/core/reservoir.cpp`, `test/sql/orcid_dump_sample.test`). The
   walkthrough's cell 8 uses it in place of `USING SAMPLE`.
 - The pre-3.0 peer-review layout `activities:group/peer-review:summary`
-  (read sample `peer-reviews-3.0.xml`) is no longer read (2026-10-18):
+  (read sample `peer-reviews-3.0.xml`) is no longer read:
   nothing inside a `group/summary` element becomes a row, as in
-  yorc-rs, yorc-zig and ORCID's classes; the sample gives 1 external id, not 3
-  (findings of the Java baseline, #3).
-- `research_resource_hosts` (2026-10-18, CROSSCHECK #9): every host
+  yorc-rs, yorc-zig and ORCID's classes; the sample gives 1 external id, not 3.
+- `research_resource_hosts`: every host
   organization of a proposal or resource item (1 to 10 each), with `container`
   and `item_ordinal`; the first-host columns of `research_resources` and
   `research_resource_items` stay. The research_resource writer takes `hosts`
   lists (proposal and items) and writes every host; flat `host_*` fields still
   work alone, and must agree with a list given beside them.
-- Context columns appended (2026-10-18, CROSSCHECK #10): the assertion
+- Context columns appended: the assertion
   origin outside `works`, normalized ids in `person_items` and
   `notifications`, `normalized_error_code`, `contributor_orcid_host` (now also
   written), the record's `orcid_uri` / `orcid_host` in `person`, and a
   notification item's external-id URL and relationship. Every column is
   appended after the existing ones; the full list is in `docs/COVERAGE.md`
-  ("Columns added on 2026-10-18").
+  ("Columns added for the context gaps").
 
 ### JSON
 - ORCID v3.0 JSON read by every section into the same rows as the XML: the
@@ -80,12 +90,11 @@ The SQL functions keep their `orcid_` names.
   staying digits.
 - `history/creation-method` read from JSON gives the XSD value, as the XML
   does: ORCID's Java enum names `DIRECT`, `MEMBER_REFERRED`, `WEBSITE` become
-  `Direct`, `Member-referred`, `website` (`API` stays); other text is kept
-  (cross-implementation review #14).
+  `Direct`, `Member-referred`, `website` (`API` stays); other text is kept.
 - JSON members of `record`, `person`, `personal-details`, `record-summary`
   and `research-resource` are read in the XSD's child order whatever the key
   order, so `person_items` from JSON with sorted keys (as yorc-rs writes it)
-  comes in the XML's order (CROSSCHECK.md #15).
+  comes in the XML's order.
 - A dependency-free RFC 8259 parser (`src/core/json.cpp`): strict, UTF-8
   checked, depth bounded; libFuzzer target `fuzz_json`.
 
@@ -114,7 +123,7 @@ The SQL functions keep their `orcid_` names.
 - Every write sample of `reference/orcid-model` reads, writes and reads back
   to the same rows in XML, JSON and across the two
   (`test/sql/orcid_write.test`).
-- Crosswalk mode (2026-10-18, CROSSCHECK #5), off by default:
+- Crosswalk mode , off by default:
   `SET orcid_crosswalk = true`, a trailing `BOOLEAN` argument on every writer
   scalar (`orcid_work_to_xml(rec, true)`, `orcid_bulk_works_to_json(list,
   true)`; it wins over the setting, and NULL gives NULL) make the writers
