@@ -1,6 +1,7 @@
 /build
 *.duckdb_extension
 /.cache/
+AGENTS.md
 
 # test fixtures (a parent .gitignore may ignore *.gz)
 !test/data/releases/*.tar.gz

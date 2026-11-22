@@ -2,6 +2,11 @@
 
 Keep pull requests small and tested: every behavior change needs a test.
 
+Commits must be authored as `mgbilby
+<21131327+mgbilby@users.noreply.github.com>`; commits to the production
+repositories (`mgbilby/yorc-duckdb`, `duckdb/community-extensions`) must not
+carry agent or tool attribution of any kind.
+
 ## First build
 
 DuckDB's extension build system is vendored as submodules (`duckdb/`,

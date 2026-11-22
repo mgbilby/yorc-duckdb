@@ -1,8 +1,8 @@
 # Standard DuckDB community-extension pipeline (C++ / CMake variant), mirroring
 # duckdb/extension-template and mgbilby/duckdb-marc21. The released extension
-# builds against DuckDB v2.0.0; the same workflow duckdb/community-extensions
+# builds against DuckDB v2.0.1; the same workflow duckdb/community-extensions
 # runs on the commit named in description.yml, so a green run here predicts the
-# registry build. extension-ci-tools has no v2.0.0 tag yet, so the reusable
+# registry build. extension-ci-tools has no v2.0.1 tag yet, so the reusable
 # workflow and ci_tools_version stay on its v2.0-cyanoptera branch; move them
 # to the tag when it appears.
 name: Main Extension Distribution Pipeline
@@ -20,6 +20,6 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
     with:
-      duckdb_version: v2.0.0
+      duckdb_version: v2.0.1
       ci_tools_version: v2.0-cyanoptera
       extension_name: yorc
